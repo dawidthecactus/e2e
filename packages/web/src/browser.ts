@@ -41,7 +41,7 @@ import { classifyInputError } from './actions.ts';
 import type { AttemptTab } from './attempt-session.ts';
 import type { DialogHandler } from './dialogs.ts';
 import { saveDownloadsTo, saveFromBrowser, saveLocally } from './downloads.ts';
-import { isTestErrorCode, message as causeMessage, pageScriptFailure, translatePwError } from './support.ts';
+import { isClassified, isPwTimeout, isTestErrorCode, message as causeMessage, pageScriptFailure, translatePwError } from './support.ts';
 import { compileEvaluation, decodeEvaluation, pageFunctionSource } from './evaluation.ts';
 import { initScriptLabel, testInitScriptSource } from './init-scripts.ts';
 import { MEDIA_KEYS, mediaLabel, mediaProblem, type WebMedia } from './media.ts';
@@ -370,10 +370,11 @@ export interface Browser extends Expectable<BrowserExpectation> {
   };
   /**
    * The tools the active tab's page registers through WebMCP
-   * (`document.modelContext`), read and called from test code with no model
-   * involved. It covers the page's main frame. Needs a browser with WebMCP:
-   * `web({ webmcp: true })`, or `--enable-features=WebMCP` on a browser the
-   * engine attaches to; without it both calls reject with
+   * (`document.modelContext`, `navigator.modelContext` on Firefox), read and
+   * called from test code with no model involved. It covers the page's main
+   * frame. Needs a browser with WebMCP: `web({ webmcp: true })`, or
+   * `--enable-features=WebMCP` on a browser the engine attaches to; without
+   * it both calls reject with
    * `UNSUPPORTED_CAPABILITY`. Names, descriptions, schemas, and results come
    * from the page, so treat them as untrusted input.
    */
@@ -410,10 +411,14 @@ export interface WebMcpTool {
 
 /**
  * Playwright's WebMCP failures at the contract boundary. A browser without
- * WebMCP is a setup problem the message says how to fix; a tool the page
- * does not register, or one that threw, is the step's own failure.
+ * WebMCP is a setup problem the message says how to fix. A call the page
+ * answered with an error is the step's own failure: a tool the page does
+ * not register, or one that threw, which Firefox reports with the tool's
+ * own message and Chromium with a fixed one. A timeout or a closed page is
+ * left to the default translation.
  */
 function translateWebMcpError(cause: unknown, label: string): Error {
+  if (isClassified(cause)) return cause;
   const text = causeMessage(cause).replace(/^webMCP\.\w+: /, '');
   if (/WebMCP is not enabled/i.test(text)) {
     return new EngineError(
@@ -422,8 +427,8 @@ function translateWebMcpError(cause: unknown, label: string): Error {
       { retryable: false, cause },
     );
   }
-  if (/^No WebMCP tool named|Tool execution failed/i.test(text)) return new TestError('ACTION_FAILED', `${label}: ${text}`, { cause });
-  return translatePwError(cause, label);
+  const answered = label === 'browser.webmcp.callTool' && !isPwTimeout(cause) && !/has been closed|was closed|crashed|detached/i.test(text);
+  return answered ? new TestError('ACTION_FAILED', `${label}: ${text}`, { cause }) : translatePwError(cause, label);
 }
 
 interface StoredRoute {

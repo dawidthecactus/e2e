@@ -612,7 +612,7 @@ the opener is gone. `tabs()`, `newTab()`, `tab.activate()`, and
   the call. Prefer `locator.press` and `locator.fill`.
 - `webmcp.tools()`, `webmcp.callTool(name, input?)`: the tools the page
   registers through WebMCP (`document.modelContext`), listed and called
-  with no model. Needs `web({ webmcp: true })`, Chromium, and a page on
+  with no model. Needs `web({ webmcp: true })`, Chromium or Firefox, and a page on
   `https:` or `localhost`; without WebMCP both fail with
   `UNSUPPORTED_CAPABILITY`. `callTool` returns the tool's result and fails
   with `ACTION_FAILED` when the page has no such tool or the tool throws.

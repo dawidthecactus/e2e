@@ -1047,8 +1047,8 @@ await browser.mouse.up();
 #### WebMCP
 
 [WebMCP](https://github.com/webmachinelearning/webmcp) is an experimental
-browser API a page registers tools through, on `document.modelContext`.
-`browser.webmcp` lists the tools the page in the active tab registered and
+browser API a page registers tools through, on `document.modelContext`
+(`navigator.modelContext` in Firefox). `browser.webmcp` lists the tools the page in the active tab registered and
 calls them from test code, with no model involved.
 
 ```ts title="e2e.config.ts"
@@ -1063,16 +1063,18 @@ const result = await browser.webmcp.callTool('add', { a: 2, b: 40 });
 expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
 ```
 
-- `web({ webmcp: true })` launches Chromium with `--enable-features=WebMCP`.
-  It is off by default, since with it every page sees an API most browsers
-  do not have yet. It is Chromium only, and only for a browser the engine
-  launches: start a browser reached through [`connect`](#connect) or a
-  provider with that argument yourself.
+- `web({ webmcp: true })` launches Chromium with `--enable-features=WebMCP`,
+  or Firefox with its `dom.modelcontext` preferences. It is off by default,
+  since with it every page sees an API most browsers do not have yet. WebKit
+  has no WebMCP. The option is only for a browser the engine launches: start
+  a browser reached through [`connect`](#connect) or a provider with that
+  argument yourself.
 - The page has to be a secure context, `https:` or `localhost`, or it has no
   `document.modelContext` and registers nothing.
 - `tools()` returns the tools registered now, each with its `name`,
   `description`, `inputSchema`, and `annotations` when the page gave them. A
-  page that registers none gives an empty list.
+  page that registers none gives an empty list. The order is the browser's
+  own and differs between Chromium and Firefox.
 - `callTool(name, input)` resolves with what the tool's `execute` resolved
   to, usually an object with a `content` array. `input` is JSON and defaults
   to an empty object. A result with `isError: true` comes back as it is.
@@ -1102,9 +1104,9 @@ export interface WebMcpTool {
 | Throws | When |
 | --- | --- |
 | `UNSUPPORTED_CAPABILITY` | The browser runs without WebMCP. The message says how to turn it on. |
-| `ACTION_FAILED` | `callTool`: the page registers no tool of that name (the message lists the ones it does), or the tool threw. |
+| `ACTION_FAILED` | `callTool`: the page registers no tool of that name (the message lists the ones it does), or the tool threw. Firefox reports the tool's own message, Chromium `Tool execution failed`. |
 | `INVALID_ARGUMENT` | `callTool`: `name` is not a non-empty string, or `input` is not JSON. |
-| `INVALID_CONFIG` | `web({ webmcp: true })` with `connect`, a browser provider, or a browser other than Chromium. |
+| `INVALID_CONFIG` | `web({ webmcp: true })` with `connect`, a browser provider, or WebKit. |
 
 ## Installing browsers
 
@@ -1295,7 +1297,7 @@ export interface WebOptions {
   readonly reducedMotion?: WebMedia['reducedMotion'];
   /** Scripts every document runs before the page's own. See [Init scripts](#init-scripts). */
   readonly initScripts?: readonly WebInitScript[];
-  /** Launches Chromium with WebMCP, for `browser.webmcp`. See [WebMCP](#webmcp). */
+  /** Launches Chromium or Firefox with WebMCP, for `browser.webmcp`. See [WebMCP](#webmcp). */
   readonly webmcp?: boolean;
 }
 ```

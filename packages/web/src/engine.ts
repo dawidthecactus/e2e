@@ -359,8 +359,8 @@ function validateTimezoneId(timezoneId: unknown): void {
  * are set on each page, not only on a context the engine creates.
  */
 /**
- * `webmcp` is a launch argument, so it needs a browser the engine launches,
- * and Chromium is the one browser it is checked on.
+ * `webmcp` changes how the browser is launched, so it needs a browser the
+ * engine launches, and one that has WebMCP: WebKit does not.
  */
 function validateWebmcp(options: WebOptions, provider: BrowserProvider | undefined): void {
   if (typeof options.webmcp !== 'boolean') {
@@ -371,11 +371,11 @@ function validateWebmcp(options: WebOptions, provider: BrowserProvider | undefin
   if (elsewhere !== undefined) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      `web({ webmcp }) is a launch argument, and with ${elsewhere} the engine does not launch the browser; start that browser with --enable-features=WebMCP and remove webmcp`,
+      `web({ webmcp }) is a launch setting, and with ${elsewhere} the engine does not launch the browser; start that browser with --enable-features=WebMCP and remove webmcp`,
     );
   }
-  if (typeof options.browser === 'string' && options.browser !== 'chromium') {
-    throw new ConfigurationError('INVALID_CONFIG', `web({ webmcp }) requires the chromium browser, got "${options.browser}"`);
+  if (options.browser === 'webkit') {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ webmcp }) requires the chromium or firefox browser; WebKit does not implement WebMCP');
   }
 }
 

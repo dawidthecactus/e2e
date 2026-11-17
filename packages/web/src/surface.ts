@@ -46,7 +46,7 @@ import {
 } from '@e2e-dev/core/engine';
 import { matchesText } from '@e2e-dev/core/engine';
 import { classifyActionError, classifyInputError, dispatchLocatorAction, dispatchPointerAction } from './actions.ts';
-import { BrowserConnection, connectCdp, type BrowserName } from './browser-connection.ts';
+import { BrowserConnection, connectCdp, type BrowserLaunchOptions, type BrowserName } from './browser-connection.ts';
 import { AttemptSession, type AttemptTab, type StorageState } from './attempt-session.ts';
 import type { CdpEndpointResolver } from './cdp-recovery.ts';
 import { LeasedBrowsers, type BrowserProvider, type LeaseDownloads } from './provider.ts';
@@ -283,18 +283,30 @@ export interface WebOptions {
    */
   readonly initScripts?: readonly WebInitScript[];
   /**
-   * Launches Chromium with WebMCP, the experimental browser API a page
-   * registers tools through (`document.modelContext`), so `browser.webmcp`
-   * can list and call them. Off by default: with it the page sees an API
-   * most browsers do not have yet. Chromium only, and only for a browser
-   * the engine launches; one reached through `connect` or a provider has to
-   * be started with `--enable-features=WebMCP` itself.
+   * Launches the browser with WebMCP, the experimental browser API a page
+   * registers tools through (`document.modelContext`, `navigator.modelContext`
+   * on Firefox), so `browser.webmcp` can list and call them. Off by default:
+   * with it the page sees an API most browsers do not have yet. Chromium and
+   * Firefox, and only for a browser the engine launches; one reached through
+   * `connect` or a provider has to be started with `--enable-features=WebMCP`
+   * itself.
    */
   readonly webmcp?: boolean;
 }
 
 /** The Chromium argument that turns WebMCP on; also named in the error `browser.webmcp` gives without it. */
 export const WEBMCP_LAUNCH_ARG = '--enable-features=WebMCP';
+
+/**
+ * How each browser is launched with WebMCP: an argument on Chromium, two
+ * preferences on Firefox, where the second lets a test read and call the
+ * tools. WebKit has no WebMCP, which `web()` refuses before a launch.
+ */
+function webmcpLaunch(browser: BrowserName): BrowserLaunchOptions {
+  return browser === 'firefox'
+    ? { firefoxUserPrefs: { 'dom.modelcontext.enabled': true, 'dom.modelcontext.testing.enabled': true } }
+    : { args: [WEBMCP_LAUNCH_ARG] };
+}
 
 /** The test-id attribute when the options name none. */
 const DEFAULT_TEST_ID_ATTRIBUTE = 'data-testid';
@@ -309,8 +321,8 @@ export class PlaywrightSurface {
 
   private readonly browserName: BrowserName;
   private readonly connection = new BrowserConnection();
-  /** Extra command-line arguments for the browser the engine launches. */
-  private readonly launchArgs: readonly string[];
+  /** What the options add to the launch of the browser the engine launches. */
+  private readonly launch: BrowserLaunchOptions;
   private readonly connect: WebConnectOptions | undefined;
   /** The provider's browsers, when `browser` names one; the runner and worker halves of the lease bookkeeping. */
   private readonly leases: LeasedBrowsers | undefined;
@@ -356,7 +368,7 @@ export class PlaywrightSurface {
     this.browserName = typeof options.browser === 'string' ? options.browser : 'chromium';
     this.leases = typeof options.browser === 'object' && options.browser !== null ? new LeasedBrowsers(options.browser) : undefined;
     this.connect = options.connect;
-    this.launchArgs = options.webmcp === true ? [WEBMCP_LAUNCH_ARG] : [];
+    this.launch = options.webmcp === true ? webmcpLaunch(this.browserName) : {};
     this.viewport = options.viewport === undefined ? DEFAULT_VIEWPORT : options.viewport;
     this.screencast = options.screencast ?? {};
     this.headers = options.headers === undefined ? undefined : lowercaseNames(options.headers);
@@ -441,7 +453,7 @@ export class PlaywrightSurface {
     if (signal.aborted) throw cancelled(`browser ${verb} cancelled`);
     try {
       return await raceAbort(
-        this.connection.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS, this.connector(signal), this.launchArgs),
+        this.connection.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS, this.connector(signal), this.launch),
         signal,
         `browser ${verb}`,
       );
