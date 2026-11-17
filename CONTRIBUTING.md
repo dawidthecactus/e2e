@@ -337,7 +337,7 @@ from the same release always match. `e2e` and `@e2e-dev/core` are a changesets
 `fixed` group: they always share a version, and `e2e` depends on that exact
 `@e2e-dev/core`. Engines declare a peer range on `@e2e-dev/core` that points one way
 only (engine to core, `>=x <1`), plus an optional one on `e2e` for the main
-entry that adds the engine's fixture to `test`, and each integration (`@e2e-dev/kernel`, `@e2e-dev/lightpanda`, `@e2e-dev/eas`, `@e2e-dev/smol`, `@e2e-dev/testmu`, `@e2e-dev/browserstack`, `@e2e-dev/e2b`) does
+entry that adds the engine's fixture to `test`, and each integration (`@e2e-dev/kernel`, `@e2e-dev/lightpanda`, `@e2e-dev/eas`, `@e2e-dev/smol`, `@e2e-dev/testmu`, `@e2e-dev/browserstack`, `@e2e-dev/e2b`, `@e2e-dev/revyl`) does
 the same on the engines it plugs into; do not make it mutual or narrow it.
 
 ### Driver nightly compatibility

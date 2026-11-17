@@ -47,8 +47,7 @@
     "@openrouter/ai-sdk-provider",
     "@expo/fingerprint",
     "@expo/repack-app",
-    "@oxc-project/runtime",
-    "@agent-device/testmu"
+    "@oxc-project/runtime"
   ],
   "ignoreBinaries": ["eas"],
   "ignoreExports": [
