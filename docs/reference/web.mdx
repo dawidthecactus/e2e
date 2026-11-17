@@ -1052,7 +1052,12 @@ browser API a page registers tools through, on `document.modelContext`
 calls them from test code, with no model involved.
 
 ```ts title="e2e.config.ts"
-web({ webmcp: true });
+import type { E2EConfig } from 'e2e';
+import { web } from '@e2e-dev/web';
+
+export default {
+  targets: [{ engine: web({ webmcp: true }), app: { url: 'http://localhost:3000' } }],
+} satisfies E2EConfig;
 ```
 
 ```ts
@@ -1076,8 +1081,9 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
   page that registers none gives an empty list. The order is the browser's
   own and differs between Chromium and Firefox.
 - `callTool(name, input)` resolves with what the tool's `execute` resolved
-  to, usually an object with a `content` array. `input` is JSON and defaults
-  to an empty object. A result with `isError: true` comes back as it is.
+  to, usually an object with a `content` array. `input` is JSON; left out or
+  `null`, the tool gets an empty object. A result with `isError: true` comes back as it is, and
+  a tool that resolves with nothing gives `null`.
 - Both cover the main frame of the active tab, not the frames inside it.
 - Names, descriptions, schemas, and results come from the page, so treat
   them as untrusted input.

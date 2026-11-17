@@ -41,7 +41,7 @@ import { classifyInputError } from './actions.ts';
 import type { AttemptTab } from './attempt-session.ts';
 import type { DialogHandler } from './dialogs.ts';
 import { saveDownloadsTo, saveFromBrowser, saveLocally } from './downloads.ts';
-import { isClassified, isPwTimeout, isTestErrorCode, message as causeMessage, pageScriptFailure, translatePwError } from './support.ts';
+import { isClassified, isNavigationRace, isPwTimeout, isTestErrorCode, message as causeMessage, pageScriptFailure, translatePwError } from './support.ts';
 import { compileEvaluation, decodeEvaluation, pageFunctionSource } from './evaluation.ts';
 import { initScriptLabel, testInitScriptSource } from './init-scripts.ts';
 import { MEDIA_KEYS, mediaLabel, mediaProblem, type WebMedia } from './media.ts';
@@ -382,9 +382,10 @@ export interface Browser extends Expectable<BrowserExpectation> {
     /** Returns the tools the page has registered now. */
     tools(): Promise<readonly WebMcpTool[]>;
     /**
-     * Calls one tool with `input` (an empty object when left out) and
+     * Calls one tool with `input` (an empty object when left out or `null`) and
      * resolves with what its `execute` resolved to, usually an object with a
-     * `content` array; a result with `isError: true` comes back as it is.
+     * `content` array; a result with `isError: true` comes back as it is,
+     * and a tool that resolves with nothing gives `null`.
      * Rejects with `ACTION_FAILED` when the page registers no tool of that
      * name, naming the ones it does, or when the tool throws.
      */
@@ -414,8 +415,8 @@ export interface WebMcpTool {
  * WebMCP is a setup problem the message says how to fix. A call the page
  * answered with an error is the step's own failure: a tool the page does
  * not register, or one that threw, which Firefox reports with the tool's
- * own message and Chromium with a fixed one. A timeout or a closed page is
- * left to the default translation.
+ * own message and Chromium with a fixed one. A timeout, a closed or crashed
+ * page, and a navigation during the call are left to the default translation.
  */
 function translateWebMcpError(cause: unknown, label: string): Error {
   if (isClassified(cause)) return cause;
@@ -427,7 +428,9 @@ function translateWebMcpError(cause: unknown, label: string): Error {
       { retryable: false, cause },
     );
   }
-  const answered = label === 'browser.webmcp.callTool' && !isPwTimeout(cause) && !/has been closed|was closed|crashed|detached/i.test(text);
+  // What the browser reports about itself, not what the page answered: a closed or crashed target, a page that navigated away mid-call.
+  const engineSide = isPwTimeout(cause) || isNavigationRace(cause) || /target closed|has been closed|was closed|crashed|disconnected/i.test(text);
+  const answered = label === 'browser.webmcp.callTool' && !engineSide;
   return answered ? new TestError('ACTION_FAILED', `${label}: ${text}`, { cause }) : translatePwError(cause, label);
 }
 
@@ -989,7 +992,7 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
         }
         validateJsonValue(input, 'browser.webmcp.callTool input');
         // JSON safety is checked above; Playwright's recursive argument type cannot expand JsonValue.
-        const argument: unknown = input ?? {};
+        const argument: unknown = input === undefined ? {} : input;
         const result = await surface.guard(
           context.operation(),
           'browser.webmcp.callTool',

@@ -354,11 +354,6 @@ function validateTimezoneId(timezoneId: unknown): void {
 }
 
 /**
- * Refuses a media feature value the browser does not emulate, at config load
- * rather than at the first page. A persistent context takes these too: they
- * are set on each page, not only on a context the engine creates.
- */
-/**
  * `webmcp` changes how the browser is launched, so it needs a browser the
  * engine launches, and one that has WebMCP: WebKit does not.
  */
@@ -379,6 +374,11 @@ function validateWebmcp(options: WebOptions, provider: BrowserProvider | undefin
   }
 }
 
+/**
+ * Refuses a media feature value the browser does not emulate, at config load
+ * rather than at the first page. A persistent context takes these too: they
+ * are set on each page, not only on a context the engine creates.
+ */
 function validateMedia(options: WebOptions): void {
   for (const key of MEDIA_KEYS) {
     const problem = mediaProblem((name) => `web({ ${name} })`, key, options[key]);

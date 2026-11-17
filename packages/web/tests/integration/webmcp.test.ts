@@ -20,7 +20,7 @@ import type { EngineCleanupContext, EngineFixtureContext, EngineHandle, Operatio
 import { web, type Browser, type BrowserName, type BrowserProvider, type WebOptions } from '../../src/index.ts';
 import { ignoreTrace, noSecrets } from '../helpers/secrets.ts';
 
-/** A page that registers three tools, and one more when `/late` is asked for it. */
+/** A page that registers four tools, and one more when `registerLate()` is called. */
 const TOOLS_PAGE = `<!doctype html>
 <title>tools</title>
 <script>
@@ -43,6 +43,12 @@ const TOOLS_PAGE = `<!doctype html>
     description: 'Always throws',
     inputSchema: { type: 'object' },
     execute: async () => { throw new Error('not today'); },
+  });
+  context?.registerTool({
+    name: 'echo',
+    description: 'Says what kind of input it got and resolves with nothing when asked to',
+    inputSchema: {},
+    execute: async (input) => (input?.silent ? undefined : { content: [{ type: 'text', text: input === null ? 'null' : typeof input }] }),
   });
   window.registerLate = () => context?.registerTool({
     name: 'late', description: 'Registered after load', inputSchema: { type: 'object' },
@@ -132,7 +138,7 @@ describe('browser.webmcp', () => {
     it.skipIf(!installed)('lists the tools the page registered, as the page describes them', async () => {
       const tools = await browser.webmcp.tools();
       // The browsers list them in different orders.
-      expect(tools.map((tool) => tool.name).toSorted()).toEqual(['add', 'refuse', 'rename']);
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual(['add', 'echo', 'refuse', 'rename']);
       expect(tools.find((tool) => tool.name === 'add')).toMatchObject({
         name: 'add',
         description: 'Adds two numbers',
@@ -151,6 +157,13 @@ describe('browser.webmcp', () => {
       expect(await browser.title()).toBe('tools');
     });
 
+    it.skipIf(!installed)('gives the tool an object when the input is left out or null, and resolves with null when the tool resolves with nothing', async () => {
+      expect(await browser.webmcp.callTool('echo')).toEqual({ content: [{ type: 'text', text: 'object' }] });
+      // Playwright sends an empty object for a null input too, so a tool never sees null.
+      expect(await browser.webmcp.callTool('echo', null)).toEqual({ content: [{ type: 'text', text: 'object' }] });
+      expect(await browser.webmcp.callTool('echo', { silent: true })).toBeNull();
+    });
+
     it.skipIf(!installed)('sees a tool the page registers after load', async () => {
       await browser.evaluate('window.registerLate()');
       expect((await browser.webmcp.tools()).map((tool) => tool.name)).toContain('late');
@@ -160,7 +173,7 @@ describe('browser.webmcp', () => {
     it.skipIf(!installed)('fails a call to a tool the page does not register, naming the ones it does', async () => {
       await expect(browser.webmcp.callTool('subtract', { a: 1, b: 1 })).rejects.toMatchObject({
         code: 'ACTION_FAILED',
-        message: expect.stringMatching(/^browser\.webmcp\.callTool: No WebMCP tool named "subtract"\. Available tools: (\w+, ){3}\w+/),
+        message: expect.stringMatching(/^browser\.webmcp\.callTool: No WebMCP tool named "subtract"\. Available tools: (\w+, ){4}\w+/),
       });
     });
 

@@ -616,6 +616,7 @@ the opener is gone. `tabs()`, `newTab()`, `tab.activate()`, and
   `https:` or `localhost`; without WebMCP both fail with
   `UNSUPPORTED_CAPABILITY`. `callTool` returns the tool's result and fails
   with `ACTION_FAILED` when the page has no such tool or the tool throws.
+  Both cover the page's main frame only, not its iframes.
 
 A `route`, `unroute`, or `waitForResponse` pattern is a glob string or
 `RegExp` matched against the full URL (`*` stays within one path segment,
