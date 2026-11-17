@@ -20,7 +20,7 @@ import {
 } from '@e2e-dev/core/engine';
 import { createRequire } from 'node:module';
 import type { WebFixtures } from './fixtures.ts';
-import { asBrowserProvider } from './provider.ts';
+import { asBrowserProvider, type BrowserProvider } from './provider.ts';
 import { PlaywrightSurface, type WebOptions } from './surface.ts';
 import { createBrowserFixture } from './browser.ts';
 import { validateInitScripts } from './init-scripts.ts';
@@ -93,6 +93,7 @@ export function web(options: WebOptions = {}): EngineHandle<WebFixtures> {
   validateMedia(options);
   if (options.initScripts !== undefined) validateInitScripts(options.initScripts);
   if (options.screencast !== undefined) validateScreencast(options.screencast);
+  if (options.webmcp !== undefined) validateWebmcp(options, provider);
   const reconnecting = options.connect?.reconnectEndpoint !== undefined;
   // A per-attempt lease rides the same persistent context as `reconnectEndpoint`, with the same limits.
   const recoverable = reconnecting || provider?.scope === 'attempt';
@@ -182,6 +183,7 @@ const WEB_OPTION_KEYS: readonly string[] = Object.keys({
   colorScheme: true,
   reducedMotion: true,
   initScripts: true,
+  webmcp: true,
 } satisfies Record<keyof WebOptions, true>);
 
 /** The options applied when the engine creates a browser context, which a persistent context never is. */
@@ -356,6 +358,27 @@ function validateTimezoneId(timezoneId: unknown): void {
  * rather than at the first page. A persistent context takes these too: they
  * are set on each page, not only on a context the engine creates.
  */
+/**
+ * `webmcp` is a launch argument, so it needs a browser the engine launches,
+ * and Chromium is the one browser it is checked on.
+ */
+function validateWebmcp(options: WebOptions, provider: BrowserProvider | undefined): void {
+  if (typeof options.webmcp !== 'boolean') {
+    throw new ConfigurationError('INVALID_CONFIG', `web({ webmcp }) must be true or false, got ${JSON.stringify(options.webmcp)}`);
+  }
+  if (!options.webmcp) return;
+  const elsewhere = provider !== undefined ? `browser provider "${provider.name}"` : options.connect !== undefined ? 'connect' : undefined;
+  if (elsewhere !== undefined) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `web({ webmcp }) is a launch argument, and with ${elsewhere} the engine does not launch the browser; start that browser with --enable-features=WebMCP and remove webmcp`,
+    );
+  }
+  if (typeof options.browser === 'string' && options.browser !== 'chromium') {
+    throw new ConfigurationError('INVALID_CONFIG', `web({ webmcp }) requires the chromium browser, got "${options.browser}"`);
+  }
+}
+
 function validateMedia(options: WebOptions): void {
   for (const key of MEDIA_KEYS) {
     const problem = mediaProblem((name) => `web({ ${name} })`, key, options[key]);

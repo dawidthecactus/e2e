@@ -53,19 +53,22 @@ export class BrowserConnection {
    * When `connect` is given the connection attaches to a remote browser through it
    * instead of launching a local one; `connect` is re-invoked on a relaunch,
    * so a caller that resolves a fresh per-run endpoint reconnects cleanly
-   * after a dropped session.
+   * after a dropped session. `args` are extra command-line arguments for a
+   * browser the connection launches; a browser it attaches to was started
+   * elsewhere and takes none.
    */
   async acquire(
     name: BrowserName,
     headed: boolean,
     timeoutMs: number,
     connect?: () => Promise<Browser>,
+    args: readonly string[] = [],
   ): Promise<Browser> {
     const cached = this.pending;
     if (cached !== undefined) {
       const browser = await cached.catch(() => null);
       if (browser !== null && browser.isConnected()) return browser;
-      if (this.pending !== cached) return this.acquire(name, headed, timeoutMs, connect);
+      if (this.pending !== cached) return this.acquire(name, headed, timeoutMs, connect, args);
       this.pending = undefined;
     }
     // Set before anything awaits: the first call loads Playwright, and a `dispose`
@@ -74,7 +77,7 @@ export class BrowserConnection {
     const launching = registerSelectorEngines().then(() =>
       connect !== undefined
         ? connect()
-        : browserType(name).then((type) => type.launch({ headless: !headed, timeout: timeoutMs, ...RUNNER_OWNS_SIGNALS })),
+        : browserType(name).then((type) => type.launch({ headless: !headed, timeout: timeoutMs, ...(args.length > 0 ? { args: [...args] } : {}), ...RUNNER_OWNS_SIGNALS })),
     );
     this.pending = launching;
     try {

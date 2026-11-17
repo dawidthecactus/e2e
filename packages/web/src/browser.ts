@@ -48,7 +48,7 @@ import { MEDIA_KEYS, mediaLabel, mediaProblem, type WebMedia } from './media.ts'
 import { lowercaseNames } from './protected-app.ts';
 import { parseContinue, parseFulfill, requireNoArguments } from './route-options.ts';
 import { routePatternMatches, routePatternsEqual } from './route-pattern.ts';
-import type { PlaywrightSurface } from './surface.ts';
+import { WEBMCP_LAUNCH_ARG, type PlaywrightSurface } from './surface.ts';
 
 /**
  * One of `json`, `body`, or `path`, or none for an empty body. `path` names a
@@ -368,6 +368,62 @@ export interface Browser extends Expectable<BrowserExpectation> {
     /** Releases the primary pointer button. */
     up(): Promise<void>;
   };
+  /**
+   * The tools the active tab's page registers through WebMCP
+   * (`document.modelContext`), read and called from test code with no model
+   * involved. It covers the page's main frame. Needs a browser with WebMCP:
+   * `web({ webmcp: true })`, or `--enable-features=WebMCP` on a browser the
+   * engine attaches to; without it both calls reject with
+   * `UNSUPPORTED_CAPABILITY`. Names, descriptions, schemas, and results come
+   * from the page, so treat them as untrusted input.
+   */
+  readonly webmcp: {
+    /** Returns the tools the page has registered now. */
+    tools(): Promise<readonly WebMcpTool[]>;
+    /**
+     * Calls one tool with `input` (an empty object when left out) and
+     * resolves with what its `execute` resolved to, usually an object with a
+     * `content` array; a result with `isError: true` comes back as it is.
+     * Rejects with `ACTION_FAILED` when the page registers no tool of that
+     * name, naming the ones it does, or when the tool throws.
+     */
+    callTool(name: string, input?: JsonValue): Promise<JsonValue>;
+  };
+}
+
+/** A tool a page registered through WebMCP, as the page describes it. */
+export interface WebMcpTool {
+  readonly name: string;
+  readonly description: string;
+  /** JSON Schema of the tool's input, when the page gave one. */
+  readonly inputSchema?: JsonValue;
+  /** Hints the page gives about the tool. */
+  readonly annotations?: {
+    /** The tool changes no state. */
+    readonly readOnly?: boolean;
+    /** The tool's output may carry third-party content. */
+    readonly untrustedContent?: boolean;
+    /** The tool takes a consequential action, such as placing an order. */
+    readonly consequential?: boolean;
+  };
+}
+
+/**
+ * Playwright's WebMCP failures at the contract boundary. A browser without
+ * WebMCP is a setup problem the message says how to fix; a tool the page
+ * does not register, or one that threw, is the step's own failure.
+ */
+function translateWebMcpError(cause: unknown, label: string): Error {
+  const text = causeMessage(cause).replace(/^webMCP\.\w+: /, '');
+  if (/WebMCP is not enabled/i.test(text)) {
+    return new EngineError(
+      'UNSUPPORTED_CAPABILITY',
+      `${label}: this browser runs without WebMCP; set web({ webmcp: true }), or start a browser the engine attaches to with ${WEBMCP_LAUNCH_ARG}`,
+      { retryable: false, cause },
+    );
+  }
+  if (/^No WebMCP tool named|Tool execution failed/i.test(text)) return new TestError('ACTION_FAILED', `${label}: ${text}`, { cause });
+  return translatePwError(cause, label);
 }
 
 interface StoredRoute {
@@ -912,6 +968,33 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
       down: () => surface.guard(context.operation(), 'mouse.down', () => surface.requirePage().mouse.down(), classifyInputError),
       up: () => surface.guard(context.operation(), 'mouse.up', () => surface.requirePage().mouse.up(), classifyInputError),
     },
+    webmcp: {
+      async tools() {
+        const tools = await surface.guard(
+          context.operation(),
+          'browser.webmcp.tools',
+          (operation) => surface.requirePage().webmcp.tools({ timeout: operation.timeoutMs }),
+          translateWebMcpError,
+        );
+        return tools as readonly WebMcpTool[];
+      },
+      async callTool(name, input) {
+        if (typeof name !== 'string' || name === '') {
+          throw new TestError('INVALID_ARGUMENT', 'browser.webmcp.callTool: name must be a non-empty string');
+        }
+        validateJsonValue(input, 'browser.webmcp.callTool input');
+        // JSON safety is checked above; Playwright's recursive argument type cannot expand JsonValue.
+        const argument: unknown = input ?? {};
+        const result = await surface.guard(
+          context.operation(),
+          'browser.webmcp.callTool',
+          (operation) => surface.requirePage().webmcp.callTool(name, argument, { timeout: operation.timeoutMs }),
+          translateWebMcpError,
+        );
+        // A tool that resolves with nothing has no JSON form; `null` is the one JSON value that says so.
+        return (result ?? null) as JsonValue;
+      },
+    },
   };
 
   const action: FixtureOperation = { kind: 'resource' };
@@ -948,6 +1031,7 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
     waitForDownloads: { ...action, timeout: false },
     keyboard: { down: { ...action, label: (key) => key }, up: { ...action, label: (key) => key }, press: { ...action, label: (key) => key }, type: { ...action, label: (text) => `${text.length} chars` } },
     mouse: { move: action, wheel: action, down: action, up: action },
+    webmcp: { tools: action, callTool: { ...action, label: (name) => String(name) } },
   });
 }
 

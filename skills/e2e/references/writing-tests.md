@@ -610,6 +610,12 @@ the opener is gone. `tabs()`, `newTab()`, `tab.activate()`, and
   `keyboard.up(key)`, `mouse.*`: unfocused input. Only `down(key)` holds a
   key or modifier until `up(key)`. `press(key)` presses and releases within
   the call. Prefer `locator.press` and `locator.fill`.
+- `webmcp.tools()`, `webmcp.callTool(name, input?)`: the tools the page
+  registers through WebMCP (`document.modelContext`), listed and called
+  with no model. Needs `web({ webmcp: true })`, Chromium, and a page on
+  `https:` or `localhost`; without WebMCP both fail with
+  `UNSUPPORTED_CAPABILITY`. `callTool` returns the tool's result and fails
+  with `ACTION_FAILED` when the page has no such tool or the tool throws.
 
 A `route`, `unroute`, or `waitForResponse` pattern is a glob string or
 `RegExp` matched against the full URL (`*` stays within one path segment,

@@ -26,6 +26,7 @@ export type {
   Browser,
   BrowserExpectation,
   BrowserTab,
+  WebMcpTool,
   Cookie,
   CookieFields,
   CookieFilter,

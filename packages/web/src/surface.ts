@@ -282,7 +282,19 @@ export interface WebOptions {
    * function, which cannot close over test variables.
    */
   readonly initScripts?: readonly WebInitScript[];
+  /**
+   * Launches Chromium with WebMCP, the experimental browser API a page
+   * registers tools through (`document.modelContext`), so `browser.webmcp`
+   * can list and call them. Off by default: with it the page sees an API
+   * most browsers do not have yet. Chromium only, and only for a browser
+   * the engine launches; one reached through `connect` or a provider has to
+   * be started with `--enable-features=WebMCP` itself.
+   */
+  readonly webmcp?: boolean;
 }
+
+/** The Chromium argument that turns WebMCP on; also named in the error `browser.webmcp` gives without it. */
+export const WEBMCP_LAUNCH_ARG = '--enable-features=WebMCP';
 
 /** The test-id attribute when the options name none. */
 const DEFAULT_TEST_ID_ATTRIBUTE = 'data-testid';
@@ -297,6 +309,8 @@ export class PlaywrightSurface {
 
   private readonly browserName: BrowserName;
   private readonly connection = new BrowserConnection();
+  /** Extra command-line arguments for the browser the engine launches. */
+  private readonly launchArgs: readonly string[];
   private readonly connect: WebConnectOptions | undefined;
   /** The provider's browsers, when `browser` names one; the runner and worker halves of the lease bookkeeping. */
   private readonly leases: LeasedBrowsers | undefined;
@@ -342,6 +356,7 @@ export class PlaywrightSurface {
     this.browserName = typeof options.browser === 'string' ? options.browser : 'chromium';
     this.leases = typeof options.browser === 'object' && options.browser !== null ? new LeasedBrowsers(options.browser) : undefined;
     this.connect = options.connect;
+    this.launchArgs = options.webmcp === true ? [WEBMCP_LAUNCH_ARG] : [];
     this.viewport = options.viewport === undefined ? DEFAULT_VIEWPORT : options.viewport;
     this.screencast = options.screencast ?? {};
     this.headers = options.headers === undefined ? undefined : lowercaseNames(options.headers);
@@ -426,7 +441,7 @@ export class PlaywrightSurface {
     if (signal.aborted) throw cancelled(`browser ${verb} cancelled`);
     try {
       return await raceAbort(
-        this.connection.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS, this.connector(signal)),
+        this.connection.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS, this.connector(signal), this.launchArgs),
         signal,
         `browser ${verb}`,
       );
