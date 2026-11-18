@@ -1048,6 +1048,8 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
           async (operation) => {
             const page = surface.requirePage();
             await requireModelContext(page, label);
+            // The check can resolve after the deadline abandoned this call; a tool must not run with nobody waiting.
+            operation.signal.throwIfAborted();
             called = true;
             // A tool may send the page elsewhere; that document loads before the call fails, so the next step does not race it.
             return surface.throughNavigation(page, operation, () => page.webmcp.callTool(name, argument, { timeout: operation.timeoutMs }));

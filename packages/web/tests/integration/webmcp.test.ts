@@ -256,6 +256,8 @@ describe('browser.webmcp', () => {
       const busy = browser.evaluate('(() => { const end = Date.now() + 3000; while (Date.now() < end); return 0; })()');
       await expect(fixtureOf(engine, 1_000).webmcp.callTool('rename', { title: 'never' })).rejects.toMatchObject({ code: 'OPERATION_TIMEOUT' });
       await busy;
+      // The abandoned call must not reach the tool once the page is free again; give a late dispatch time to land.
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
       expect(await browser.title()).toBe('tools');
     });
   });
