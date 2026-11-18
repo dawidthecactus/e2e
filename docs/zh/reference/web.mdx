@@ -881,9 +881,10 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
 ```
 
 - `web({ webmcp: true })` 会以 `--enable-features=WebMCP` 启动 Chromium，或以 `dom.modelcontext` 首选项启动 Firefox。它默认关闭，因为开启后每个页面都会看到大多数浏览器尚不具备的 API。WebKit 不支持 WebMCP。该选项只适用于引擎自己启动的浏览器：通过 [`connect`](#connect) 或提供方连接的浏览器，需要你自己带上该参数启动。
-- 页面必须是安全上下文，即 `https:` 或 `localhost`，否则没有 `document.modelContext`，也不会注册任何工具。
+- 页面必须是安全上下文，即 `https:` 或 `localhost`，否则没有 `document.modelContext`，两个调用都会以 `UNSUPPORTED_CAPABILITY` 失败。引擎直接询问页面本身，因此通过 `connect` 或提供方连接的浏览器如果启动时未开启 WebMCP，也会以同样的方式失败。
 - `tools()` 返回当前已注册的工具，每个工具包含 `name`、`description`，以及页面提供时的 `inputSchema` 和 `annotations`。没有注册工具的页面返回空列表。顺序由浏览器决定，Chromium 与 Firefox 不同。
 - `callTool(name, input)` 的结果是工具的 `execute` 解析出的值，通常是带有 `content` 数组的对象。`input` 是 JSON；省略或传入 `null` 时，工具收到空对象。带有 `isError: true` 的结果原样返回，工具不返回任何值时结果为 `null`。
+- 把页面导航到另一个 URL 的工具会在应答之前结束调用。调用会在新页面加载完成后以 `ACTION_FAILED` 失败，消息会说明工具可能已经执行。超时时仍在运行的工具也会以同样的方式失败。
 - 两者都只覆盖活动标签页的主框架，不包括其中的框架。
 - 名称、描述、schema 和结果都来自页面，应视为不可信输入。
 
@@ -908,8 +909,8 @@ export interface WebMcpTool {
 
 | 抛出错误 | 触发条件 |
 | --- | --- |
-| `UNSUPPORTED_CAPABILITY` | 浏览器运行时未启用 WebMCP。错误消息会说明如何开启。 |
-| `ACTION_FAILED` | `callTool`：页面没有注册该名称的工具（消息会列出已注册的工具），或工具抛出了错误。Firefox 报告工具自身的消息，Chromium 报告 `Tool execution failed`。 |
+| `UNSUPPORTED_CAPABILITY` | 页面没有 WebMCP：浏览器运行时未启用 WebMCP，或页面不是安全上下文。错误消息会说明是哪一种，以及如何解决。 |
+| `ACTION_FAILED` | `callTool`：页面没有注册该名称的工具（消息会列出已注册的工具），工具抛出了错误，或因页面导航或超时，调用在工具应答之前结束。 |
 | `INVALID_ARGUMENT` | `callTool`：`name` 不是非空字符串，或 `input` 不是 JSON。 |
 | `INVALID_CONFIG` | `web({ webmcp: true })` 与 `connect`、浏览器提供方或 WebKit 一起使用。 |
 

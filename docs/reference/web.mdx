@@ -1075,7 +1075,9 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
   a browser reached through [`connect`](#connect) or a provider with that
   argument yourself.
 - The page has to be a secure context, `https:` or `localhost`, or it has no
-  `document.modelContext` and registers nothing.
+  `document.modelContext` and both calls fail with `UNSUPPORTED_CAPABILITY`.
+  The engine asks the page itself, so a browser reached through `connect` or
+  a provider that was started without WebMCP fails the same way.
 - `tools()` returns the tools registered now, each with its `name`,
   `description`, `inputSchema`, and `annotations` when the page gave them. A
   page that registers none gives an empty list. The order is the browser's
@@ -1084,6 +1086,10 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
   to, usually an object with a `content` array. `input` is JSON; left out or
   `null`, the tool gets an empty object. A result with `isError: true` comes back as it is, and
   a tool that resolves with nothing gives `null`.
+- A tool that sends the page to another URL ends the call before it answers.
+  The call fails with `ACTION_FAILED` once the new page has loaded, and the
+  message says the tool may have run. A tool still running when the time runs
+  out fails the same way.
 - Both cover the main frame of the active tab, not the frames inside it.
 - Names, descriptions, schemas, and results come from the page, so treat
   them as untrusted input.
@@ -1109,8 +1115,8 @@ export interface WebMcpTool {
 
 | Throws | When |
 | --- | --- |
-| `UNSUPPORTED_CAPABILITY` | The browser runs without WebMCP. The message says how to turn it on. |
-| `ACTION_FAILED` | `callTool`: the page registers no tool of that name (the message lists the ones it does), or the tool threw. Firefox reports the tool's own message, Chromium `Tool execution failed`. |
+| `UNSUPPORTED_CAPABILITY` | The page has no WebMCP: the browser runs without it, or the page is not a secure context. The message says which, and how to fix it. |
+| `ACTION_FAILED` | `callTool`: the page registers no tool of that name (the message lists the ones it does), the tool threw, or the call ended before the tool answered, because the page navigated or the time ran out. |
 | `INVALID_ARGUMENT` | `callTool`: `name` is not a non-empty string, or `input` is not JSON. |
 | `INVALID_CONFIG` | `web({ webmcp: true })` with `connect`, a browser provider, or WebKit. |
 

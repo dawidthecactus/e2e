@@ -881,6 +881,31 @@ export class PlaywrightSurface {
     for (const watch of this.navigationAborts) watch.url ??= request.url();
   }
 
+  /**
+   * Runs page code that may send the page to another document. When it fails
+   * because the page navigated under it, the new document is left to load
+   * before the failure is thrown, so the step after it does not race that
+   * navigation. The failure itself is thrown unchanged.
+   */
+  async throughNavigation<T>(page: Page, operation: OperationContext, work: () => Promise<T>): Promise<T> {
+    const deadline = new Deadline(operation.timeoutMs);
+    const documents = watchDocuments(page);
+    try {
+      return await work();
+    } catch (cause) {
+      if (isNavigationRace(cause) && !isPwTimeout(cause) && !operation.signal.aborted) {
+        // As in `screenshot`: the rejection can arrive before the commit's `framenavigated`.
+        await documents.whenReplaced(Math.min(NAVIGATION_EVENT_GRACE_MS, deadline.remaining()));
+        if (documents.replaced()) {
+          await page.waitForLoadState('load', { timeout: Math.max(1, deadline.remaining()) }).catch(() => undefined);
+        }
+      }
+      throw cause;
+    } finally {
+      documents.stop();
+    }
+  }
+
   /** Resolves with what an action resolved with once the trace has the screen it left (`TraceFeed.screenAfterAction`); an action that failed leaves none. */
   private async acted<T>(operation: OperationContext, work: Promise<T>): Promise<T> {
     const result = await work;
@@ -1407,7 +1432,7 @@ function withTabs(snapshot: EngineSnapshot, session: AttemptSession): EngineSnap
 }
 
 /**
- * How long a screenshot waits for the navigation event after Playwright has
+ * How long a screenshot or a page call waits for the navigation event after Playwright has
  * already reported the document's context destroyed. The event is the commit
  * that destroyed the context, queued behind the capture's rejection.
  */

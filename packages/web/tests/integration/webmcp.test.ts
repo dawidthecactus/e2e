@@ -18,6 +18,7 @@ import { firefox } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { EngineCleanupContext, EngineFixtureContext, EngineHandle, OperationContext } from '@e2e-dev/core/engine';
 import { web, type Browser, type BrowserName, type BrowserProvider, type WebOptions } from '../../src/index.ts';
+import { closeRemoteChrome, launchRemoteChrome, type RemoteChrome } from '../helpers/cdp-host.ts';
 import { ignoreTrace, noSecrets } from '../helpers/secrets.ts';
 
 /** A page that registers four tools, and one more when `registerLate()` is called. */
@@ -58,12 +59,27 @@ const TOOLS_PAGE = `<!doctype html>
 
 const PLAIN_PAGE = '<!doctype html><title>plain</title><p>no tools here</p>';
 
+/** A page whose tools act and then never answer: one navigates away, one changes the title and hangs. */
+const ACTING_PAGE = `<!doctype html>
+<title>acting</title>
+<script>
+  const context = document.modelContext ?? navigator.modelContext;
+  context?.registerTool({
+    name: 'leave', description: 'Goes to another page', inputSchema: { type: 'object' },
+    execute: async () => { location.href = '/plain'; await new Promise(() => {}); },
+  });
+  context?.registerTool({
+    name: 'stall', description: 'Renames the page and never answers', inputSchema: { type: 'object' },
+    execute: async () => { document.title = 'stalled'; await new Promise(() => {}); },
+  });
+</script>`;
+
 function cleanup(): EngineCleanupContext {
   return { signal: new AbortController().signal, timeoutMs: 30_000 };
 }
 
-function operation(): OperationContext {
-  return { signal: new AbortController().signal, timeoutMs: 30_000, runId: 'run-webmcp', attemptId: 'w1', origin: 'test' };
+function operation(timeoutMs = 30_000): OperationContext {
+  return { signal: new AbortController().signal, timeoutMs, runId: 'run-webmcp', attemptId: 'w1', origin: 'test' };
 }
 
 describe('browser.webmcp', () => {
@@ -74,7 +90,7 @@ describe('browser.webmcp', () => {
   beforeAll(async () => {
     server = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'text/html' });
-      response.end(request.url === '/plain' ? PLAIN_PAGE : TOOLS_PAGE);
+      response.end(request.url === '/plain' ? PLAIN_PAGE : request.url === '/acting' ? ACTING_PAGE : TOOLS_PAGE);
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     // `localhost`, not the address: WebMCP needs a secure context, which localhost is.
@@ -104,10 +120,10 @@ describe('browser.webmcp', () => {
     await engine.dispose!(cleanup());
   }
 
-  /** The engine's `browser` fixture, with the harness parts it reaches stubbed. */
-  function fixtureOf(engine: EngineHandle): Browser {
+  /** The engine's `browser` fixture, with the harness parts it reaches stubbed; `timeoutMs` is each operation's budget. */
+  function fixtureOf(engine: EngineHandle, timeoutMs?: number): Browser {
     return engine.fixtures!['browser']!({
-      operation,
+      operation: () => operation(timeoutMs),
       app: { resolveUrl: (url: string) => new URL(url, origin).href },
       expectable: (target: object) => target,
       fixture: (_name: string, target: object) => target,
@@ -143,6 +159,7 @@ describe('browser.webmcp', () => {
         name: 'add',
         description: 'Adds two numbers',
         inputSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'] },
+        annotations: { readOnly: true },
       });
     });
 
@@ -201,6 +218,78 @@ describe('browser.webmcp', () => {
       expect((await browser.webmcp.tools()).length).toBeGreaterThan(0);
       await tab.close();
     });
+
+    it.skipIf(!installed)('says the page is not a secure context when it is served over plain http', async () => {
+      await browser.route('http://insecure.test/', (route) => route.fulfill({ body: TOOLS_PAGE, contentType: 'text/html' }));
+      await engine.session!.open!('http://insecure.test/', operation());
+      const expected = {
+        code: 'UNSUPPORTED_CAPABILITY',
+        message: expect.stringMatching(/this page has no WebMCP because it is not a secure context; serve it on https: or localhost/),
+      };
+      await expect(browser.webmcp.tools()).rejects.toMatchObject(expected);
+      await expect(browser.webmcp.callTool('add', { a: 2, b: 40 })).rejects.toMatchObject(expected);
+      await browser.unrouteAll();
+    });
+
+    it.skipIf(!installed)('reports a tool that navigates the page away as possibly committed, and the next navigation goes through', async () => {
+      await engine.session!.open!(`${origin}/acting`, operation());
+      await expect(browser.webmcp.callTool('leave')).rejects.toMatchObject({
+        code: 'ACTION_MAY_HAVE_COMMITTED',
+        message: expect.stringMatching(/^browser\.webmcp\.callTool: the page navigated before the tool "leave" answered; the tool may have run/),
+      });
+      await engine.session!.open!(`${origin}/`, operation());
+      expect(await browser.title()).toBe('tools');
+    });
+
+    it.skipIf(!installed)('reports a tool the deadline cut off as possibly committed', async () => {
+      await engine.session!.open!(`${origin}/acting`, operation());
+      await expect(fixtureOf(engine, 2_000).webmcp.callTool('stall')).rejects.toMatchObject({
+        code: 'ACTION_MAY_HAVE_COMMITTED',
+        message: expect.stringMatching(/^browser\.webmcp\.callTool: the tool "stall" did not answer in time; it may have run/),
+      });
+      expect(await browser.title()).toBe('stalled');
+    });
+  });
+
+  describe('on a browser the engine attaches to', () => {
+    const remotes: RemoteChrome[] = [];
+
+    afterAll(async () => {
+      await Promise.all(remotes.map((remote) => closeRemoteChrome(remote)));
+    });
+
+    /** Attaches an engine to a Chromium started with `args`, and opens the tools page in it. */
+    async function attach(args: readonly string[]): Promise<{ engine: EngineHandle; browser: Browser }> {
+      const remote = await launchRemoteChrome(args);
+      remotes.push(remote);
+      const engine = await boot({ connect: { cdpEndpoint: () => remote.endpoint } });
+      await engine.session!.open!(`${origin}/`, operation());
+      return { engine, browser: fixtureOf(engine) };
+    }
+
+    it('says how to turn WebMCP on when that browser was started without it', async () => {
+      const { engine, browser } = await attach([]);
+      try {
+        const expected = {
+          code: 'UNSUPPORTED_CAPABILITY',
+          message: expect.stringMatching(/this browser runs without WebMCP; set web\(\{ webmcp: true \}\).*--enable-features=WebMCP/),
+        };
+        await expect(browser.webmcp.tools()).rejects.toMatchObject(expected);
+        await expect(browser.webmcp.callTool('add', { a: 2, b: 40 })).rejects.toMatchObject(expected);
+      } finally {
+        await shutdown(engine);
+      }
+    }, 60_000);
+
+    it('lists and calls tools when that browser was started with it', async () => {
+      const { engine, browser } = await attach(['--enable-features=WebMCP']);
+      try {
+        expect((await browser.webmcp.tools()).map((tool) => tool.name)).toContain('add');
+        expect(await browser.webmcp.callTool('add', { a: 2, b: 40 })).toEqual({ content: [{ type: 'text', text: '42' }] });
+      } finally {
+        await shutdown(engine);
+      }
+    }, 60_000);
   });
 
   it('says how to turn WebMCP on when the browser runs without it', async () => {

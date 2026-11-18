@@ -12,7 +12,7 @@
  * says which URLs a test may open.
  */
 
-import type { Download, Route } from 'playwright-core';
+import type { Download, Page, Route } from 'playwright-core';
 import type { ActionOptions, Expectable, JsonValue, Locator, Screen, TextMatch } from '@e2e-dev/core';
 import {
   ConfigurationError,
@@ -373,8 +373,8 @@ export interface Browser extends Expectable<BrowserExpectation> {
    * (`document.modelContext`, `navigator.modelContext` on Firefox), read and
    * called from test code with no model involved. It covers the page's main
    * frame. Needs a browser with WebMCP: `web({ webmcp: true })`, or
-   * `--enable-features=WebMCP` on a browser the engine attaches to; without
-   * it both calls reject with
+   * `--enable-features=WebMCP` on a browser the engine attaches to, and a
+   * page in a secure context; on a page without WebMCP both calls reject with
    * `UNSUPPORTED_CAPABILITY`. Names, descriptions, schemas, and results come
    * from the page, so treat them as untrusted input.
    */
@@ -387,7 +387,9 @@ export interface Browser extends Expectable<BrowserExpectation> {
      * `content` array; a result with `isError: true` comes back as it is,
      * and a tool that resolves with nothing gives `null`.
      * Rejects with `ACTION_FAILED` when the page registers no tool of that
-     * name, naming the ones it does, or when the tool throws.
+     * name, naming the ones it does, when the tool throws, and when the call
+     * ends before the tool answers, because the tool navigated the page or
+     * the time ran out; the tool may have run then.
      */
     callTool(name: string, input?: JsonValue): Promise<JsonValue>;
   };
@@ -410,28 +412,66 @@ export interface WebMcpTool {
   };
 }
 
+/** The setup error for a browser that runs without WebMCP; it says how to turn it on. */
+function withoutWebMcp(label: string, cause?: unknown): EngineError {
+  return new EngineError(
+    'UNSUPPORTED_CAPABILITY',
+    `${label}: this browser runs without WebMCP; set web({ webmcp: true }), or start a browser the engine attaches to with ${WEBMCP_LAUNCH_ARG}`,
+    { retryable: false, ...(cause === undefined ? {} : { cause }) },
+  );
+}
+
+/**
+ * Refuses a page that has no WebMCP, asked of the page itself: Playwright
+ * checks only the launch options of a browser it started, so on a browser the
+ * engine attaches to, or on a page outside a secure context, it would list no
+ * tools where there is no WebMCP to register one with.
+ */
+async function requireModelContext(page: Page, label: string): Promise<void> {
+  const state = await page.evaluate(() => {
+    const holders: readonly object[] = [document, navigator];
+    if (holders.some((holder) => 'modelContext' in holder && holder.modelContext != null)) return 'present';
+    return isSecureContext ? 'absent' : 'insecure';
+  });
+  if (state === 'present') return;
+  if (state === 'absent') throw withoutWebMcp(label);
+  throw new EngineError(
+    'UNSUPPORTED_CAPABILITY',
+    `${label}: this page has no WebMCP because it is not a secure context; serve it on https: or localhost`,
+    { retryable: false },
+  );
+}
+
+/**
+ * A tool call that ended with no answer from the tool: whether the tool ran
+ * is unknown, so the call must not be repeated blindly.
+ */
+function unanswered(label: string, text: string, cause: unknown): EngineError {
+  return new EngineError('ACTION_MAY_HAVE_COMMITTED', `${label}: ${text}`, { retryable: false, cause });
+}
+
 /**
  * Playwright's WebMCP failures at the contract boundary. A browser without
  * WebMCP is a setup problem the message says how to fix. A call the page
  * answered with an error is the step's own failure: a tool the page does
  * not register, or one that threw, which Firefox reports with the tool's
- * own message and Chromium with a fixed one. A timeout, a closed or crashed
- * page, and a navigation during the call are left to the default translation.
+ * own message and Chromium with a fixed one. A call that ended before the
+ * tool answered, because the page navigated or the time ran out, may have
+ * committed: a tool that sends the page elsewhere does exactly that. A closed
+ * or crashed page, and every failure of `tools`, are left to the default
+ * translation.
  */
-function translateWebMcpError(cause: unknown, label: string): Error {
+function translateWebMcpError(cause: unknown, label: string, tool?: string): Error {
+  const timedOut = isPwTimeout(cause) || (cause instanceof EngineError && cause.code === 'OPERATION_TIMEOUT');
+  if (tool !== undefined && timedOut) return unanswered(label, `the tool ${JSON.stringify(tool)} did not answer in time; it may have run`, cause);
   if (isClassified(cause)) return cause;
   const text = causeMessage(cause).replace(/^webMCP\.\w+: /, '');
-  if (/WebMCP is not enabled/i.test(text)) {
-    return new EngineError(
-      'UNSUPPORTED_CAPABILITY',
-      `${label}: this browser runs without WebMCP; set web({ webmcp: true }), or start a browser the engine attaches to with ${WEBMCP_LAUNCH_ARG}`,
-      { retryable: false, cause },
-    );
-  }
-  // What the browser reports about itself, not what the page answered: a closed or crashed target, a page that navigated away mid-call.
-  const engineSide = isPwTimeout(cause) || isNavigationRace(cause) || /target closed|has been closed|was closed|crashed|disconnected/i.test(text);
-  const answered = label === 'browser.webmcp.callTool' && !engineSide;
-  return answered ? new TestError('ACTION_FAILED', `${label}: ${text}`, { cause }) : translatePwError(cause, label);
+  if (/WebMCP is not enabled/i.test(text)) return withoutWebMcp(label, cause);
+  if (tool === undefined) return translatePwError(cause, label);
+  if (isNavigationRace(cause)) return unanswered(label, `the page navigated before the tool ${JSON.stringify(tool)} answered; the tool may have run`, cause);
+  // What the browser reports about itself, not what the page answered: a closed or crashed target.
+  if (/target closed|has been closed|was closed|crashed|disconnected/i.test(text)) return translatePwError(cause, label);
+  return new TestError('ACTION_FAILED', `${label}: ${text}`, { cause });
 }
 
 interface StoredRoute {
@@ -978,26 +1018,37 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
     },
     webmcp: {
       async tools() {
+        const label = 'browser.webmcp.tools';
         const tools = await surface.guard(
           context.operation(),
-          'browser.webmcp.tools',
-          (operation) => surface.requirePage().webmcp.tools({ timeout: operation.timeoutMs }),
+          label,
+          async (operation) => {
+            const page = surface.requirePage();
+            await requireModelContext(page, label);
+            return page.webmcp.tools({ timeout: operation.timeoutMs });
+          },
           translateWebMcpError,
         );
         return tools as readonly WebMcpTool[];
       },
       async callTool(name, input) {
+        const label = 'browser.webmcp.callTool';
         if (typeof name !== 'string' || name === '') {
-          throw new TestError('INVALID_ARGUMENT', 'browser.webmcp.callTool: name must be a non-empty string');
+          throw new TestError('INVALID_ARGUMENT', `${label}: name must be a non-empty string`);
         }
-        validateJsonValue(input, 'browser.webmcp.callTool input');
+        validateJsonValue(input, `${label} input`);
         // JSON safety is checked above; Playwright's recursive argument type cannot expand JsonValue.
         const argument: unknown = input === undefined ? {} : input;
         const result = await surface.guard(
           context.operation(),
-          'browser.webmcp.callTool',
-          (operation) => surface.requirePage().webmcp.callTool(name, argument, { timeout: operation.timeoutMs }),
-          translateWebMcpError,
+          label,
+          async (operation) => {
+            const page = surface.requirePage();
+            await requireModelContext(page, label);
+            // A tool may send the page elsewhere; that document loads before the call fails, so the next step does not race it.
+            return surface.throughNavigation(page, operation, () => page.webmcp.callTool(name, argument, { timeout: operation.timeoutMs }));
+          },
+          (cause, operationLabel) => translateWebMcpError(cause, operationLabel, name),
         );
         // A tool that resolves with nothing has no JSON form; `null` is the one JSON value that says so.
         return (result ?? null) as JsonValue;
