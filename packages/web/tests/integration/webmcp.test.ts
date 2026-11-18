@@ -249,6 +249,15 @@ describe('browser.webmcp', () => {
       });
       expect(await browser.title()).toBe('stalled');
     });
+
+    it.skipIf(!installed)('reports a deadline that ran out before the tool was called as a plain timeout', async () => {
+      await engine.session!.open!(`${origin}/`, operation());
+      // The page is busy for longer than the call's budget, so the call never reaches the tool.
+      const busy = browser.evaluate('(() => { const end = Date.now() + 3000; while (Date.now() < end); return 0; })()');
+      await expect(fixtureOf(engine, 1_000).webmcp.callTool('rename', { title: 'never' })).rejects.toMatchObject({ code: 'OPERATION_TIMEOUT' });
+      await busy;
+      expect(await browser.title()).toBe('tools');
+    });
   });
 
   describe('on a browser the engine attaches to', () => {

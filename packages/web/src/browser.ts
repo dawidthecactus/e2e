@@ -458,7 +458,8 @@ function unanswered(label: string, text: string, cause: unknown): EngineError {
  * own message and Chromium with a fixed one. A call that ended before the
  * tool answered, because the page navigated or the time ran out, may have
  * committed: a tool that sends the page elsewhere does exactly that. A closed
- * or crashed page, and every failure of `tools`, are left to the default
+ * or crashed page, and every failure with no `tool`, which is one of `tools`
+ * or one before the call reached the page, are left to the default
  * translation.
  */
 function translateWebMcpError(cause: unknown, label: string, tool?: string): Error {
@@ -1039,16 +1040,19 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
         validateJsonValue(input, `${label} input`);
         // JSON safety is checked above; Playwright's recursive argument type cannot expand JsonValue.
         const argument: unknown = input === undefined ? {} : input;
+        // Only a failure after the call went to the page can have run the tool; one before it is a plain failure.
+        let called = false;
         const result = await surface.guard(
           context.operation(),
           label,
           async (operation) => {
             const page = surface.requirePage();
             await requireModelContext(page, label);
+            called = true;
             // A tool may send the page elsewhere; that document loads before the call fails, so the next step does not race it.
             return surface.throughNavigation(page, operation, () => page.webmcp.callTool(name, argument, { timeout: operation.timeoutMs }));
           },
-          (cause, operationLabel) => translateWebMcpError(cause, operationLabel, name),
+          (cause, operationLabel) => translateWebMcpError(cause, operationLabel, called ? name : undefined),
         );
         // A tool that resolves with nothing has no JSON form; `null` is the one JSON value that says so.
         return (result ?? null) as JsonValue;
