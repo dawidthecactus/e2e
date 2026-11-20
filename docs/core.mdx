@@ -107,8 +107,11 @@ holds, whether that is another host or a worker of `e2e run`.
   devices first: by default a local run drives as many booted devices as it
   has workers and test files. Leave one free with `--workers`, or name the
   run's devices in the target's `device` option.
-- Two hosts that open at the same moment can pick the same free device. The
-  later one fails with `ENGINE_FAILURE`. Open device hosts one after another.
+- Without a `device` option, two hosts that open at the same moment can both
+  read one device as free. When the target's app opens at launch, the host
+  that loses moves to the next free device, and fails with `ENGINE_FAILURE`
+  only when none is left. A target with `appPath` opens nothing at launch:
+  see the next point.
 - A host holds its device from the moment its app opens. A target that names
   only `appPath` opens no app at launch, so a second host launched before the
   first one opens its app can pick the same device. Call

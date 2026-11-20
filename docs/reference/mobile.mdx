@@ -156,6 +156,10 @@ mobile({ platform: 'ios', device: ['iPhone 17', 'iPhone 17 Pro'] });
   agent-device session is skipped. A booted device nothing holds, such as
   one you are using by hand, is still in the pool: name the device to keep
   the run off it.
+- A booted device another agent-device session claims between the inventory
+  and the warm-up, such as a host that opened at the same moment, is swapped
+  for the next free one. A named device or a provider's lease is never
+  swapped.
 - [Hosted devices](/mobile#hosted-devices) has the `DeviceProvider` contract
   and an example provider.
 

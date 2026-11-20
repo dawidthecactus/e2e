@@ -306,6 +306,29 @@ export function isAppNotRunning(error: unknown): boolean {
   return error instanceof Error && details(error.cause).runnerErrorCode === 'APP_NOT_RUNNING';
 }
 
+/**
+ * The `DEVICE_IN_USE` reasons that mean another live session holds the
+ * device: a claim agent-device verified, a workspace session, or a session of
+ * the same daemon, which carries no reason. A dead owner awaiting recovery, a
+ * claim it cannot verify, and a device under human control or provider
+ * release are left out: each comes with its own advice.
+ */
+const LIVE_HOLDER_REASONS: ReadonlySet<unknown> = new Set([undefined, 'DEVICE_CLAIM_LIVE_OWNER', 'WORKSPACE_SESSION_SCOPE_CONFLICT']);
+
+/**
+ * The session holding the device, for a translated command agent-device
+ * refused because another live session holds that device, as its claim
+ * (`owner.session`) or its daemon (`session`) names it; `undefined` for any
+ * other failure.
+ */
+export function deviceHolder(error: unknown): string | undefined {
+  if (!(error instanceof Error) || !isAgentDeviceError(error.cause) || normalizeAgentDeviceError(error.cause).code !== 'DEVICE_IN_USE') return undefined;
+  const { reason, owner, session } = details(error.cause);
+  if (!LIVE_HOLDER_REASONS.has(reason)) return undefined;
+  const holder = typeof owner === 'object' && owner !== null ? (owner as { session?: unknown }).session : session;
+  return typeof holder === 'string' ? holder : undefined;
+}
+
 /** True for a translated `open` agent-device refused because no installed app matches the name. */
 export function isAppNotInstalled(error: unknown): boolean {
   return error instanceof Error && isAgentDeviceError(error.cause) && normalizeAgentDeviceError(error.cause).code === 'APP_NOT_INSTALLED';
