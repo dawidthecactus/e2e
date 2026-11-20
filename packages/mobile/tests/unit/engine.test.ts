@@ -552,6 +552,7 @@ describe('lifecycle', () => {
       new AppError('DEVICE_IN_USE', `ios device ${id} is owned by session "${session}" in workspace "/w".`, {
         reason: 'DEVICE_CLAIM_LIVE_OWNER',
         owner: { session, workspace: '/w' },
+        hint: `Inspect the owner with: agent-device device status --platform ios --udid ${id}`,
         dispatched: 'no',
       });
     const inSession = (id: string): AppError =>
@@ -701,16 +702,23 @@ describe('lifecycle', () => {
     });
     expect(elsewhere.fake.methods().filter((method) => method === 'devices.boot')).toHaveLength(1);
 
-    // Every free device taken in turn, or gone from the next inventory: the last refusal is the error.
-    for (const after of [free, [free[0]]]) {
+    // Every free device taken in turn, or every device gone from the next inventory: the last refusal is the error,
+    // with its holder, workspace and advice, and is its cause.
+    for (const after of [free, []]) {
       let lists = 0;
       const taken = harness({ device: undefined });
       taken.fake.respond('devices.list', () => (++lists === 1 ? free : after));
       taken.fake.respond('devices.boot', (args) => {
         throw claimed((args as { udid?: string }).udid ?? '?');
       });
-      const last = after.length === 1 ? 'A' : 'C';
-      expect(await bound(taken.prepare(info))).toMatch(new RegExp(`^rejected: boot failed: ios device ${last} is owned by session "e2e-ios-host-other-0".*; no other booted ios device is free for worker slot 0: `));
+      const last = after.length === 0 ? 'A' : 'C';
+      await expect(taken.prepare(info)).rejects.toMatchObject({
+        code: 'ENGINE_FAILURE',
+        message: expect.stringMatching(
+          new RegExp(`^boot failed: ios device ${last} is owned by session "e2e-ios-host-other-0" in workspace "/w"\\. Hint: Inspect the owner with: agent-device device status --platform ios --udid ${last}; no other booted ios device is free for worker slot 0: `),
+        ),
+        cause: expect.objectContaining({ message: expect.stringMatching(new RegExp(`^boot failed: ios device ${last} is owned by`)) }),
+      });
     }
 
     // Any other boot failure is not a reason to move: it fails as before, after one inventory.
