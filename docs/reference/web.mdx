@@ -1117,7 +1117,7 @@ export interface WebMcpTool {
 | --- | --- |
 | `UNSUPPORTED_CAPABILITY` | The page has no WebMCP: the browser runs without it, or the page is not a secure context. The message says which, and how to fix it. |
 | `ACTION_FAILED` | `callTool`: the page registers no tool of that name (the message lists the ones it does), the tool threw, or the call ended before the tool answered, because the page navigated or the time ran out. |
-| `INVALID_ARGUMENT` | `callTool`: `name` is not a non-empty string, or `input` is not JSON. |
+| `INVALID_ARGUMENT` | `callTool`: `name` is not a non-empty string, `input` is not JSON, or the tool ran and resolved with something JSON cannot hold (a `Date`, a `BigInt`, `NaN`). |
 | `INVALID_CONFIG` | `web({ webmcp: true })` with `connect`, a browser provider, or WebKit. |
 
 ## Installing browsers

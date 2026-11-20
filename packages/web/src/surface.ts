@@ -305,7 +305,16 @@ export const WEBMCP_LAUNCH_ARG = '--enable-features=WebMCP';
 function webmcpLaunch(browser: BrowserName): BrowserLaunchOptions {
   return browser === 'firefox'
     ? { firefoxUserPrefs: { 'dom.modelcontext.enabled': true, 'dom.modelcontext.testing.enabled': true } }
-    : { args: [WEBMCP_LAUNCH_ARG] };
+    : { args: [`--enable-features=${[...playwrightChromiumFeatures(), 'WebMCP'].join(',')}`] };
+}
+
+/**
+ * The features Playwright enables in the Chromium it launches (its `enabledFeatures`, which it does
+ * not export). Chromium keeps only the last `--enable-features` switch, so the WebMCP one repeats
+ * them; without that, turning WebMCP on would turn these off.
+ */
+function playwrightChromiumFeatures(): readonly string[] {
+  return [...(process.env.PLAYWRIGHT_LEGACY_SCREENSHOT ? [] : ['CDPScreenshotNewSurface']), 'SkipListAccountsWithoutGaiaCookies'];
 }
 
 /** The test-id attribute when the options name none. */

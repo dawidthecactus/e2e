@@ -911,7 +911,7 @@ export interface WebMcpTool {
 | --- | --- |
 | `UNSUPPORTED_CAPABILITY` | 页面没有 WebMCP：浏览器运行时未启用 WebMCP，或页面不是安全上下文。错误消息会说明是哪一种，以及如何解决。 |
 | `ACTION_FAILED` | `callTool`：页面没有注册该名称的工具（消息会列出已注册的工具），工具抛出了错误，或因页面导航或超时，调用在工具应答之前结束。 |
-| `INVALID_ARGUMENT` | `callTool`：`name` 不是非空字符串，或 `input` 不是 JSON。 |
+| `INVALID_ARGUMENT` | `callTool`：`name` 不是非空字符串，`input` 不是 JSON，或工具已运行但返回了 JSON 无法表示的值（`Date`、`BigInt`、`NaN`）。 |
 | `INVALID_CONFIG` | `web({ webmcp: true })` 与 `connect`、浏览器提供方或 WebKit 一起使用。 |
 
 ## 安装浏览器

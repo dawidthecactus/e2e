@@ -467,6 +467,9 @@ function translateWebMcpError(cause: unknown, label: string, tool?: string): Err
   if (tool !== undefined && timedOut) return unanswered(label, `the tool ${JSON.stringify(tool)} did not answer in time; it may have run`, cause);
   if (isClassified(cause)) return cause;
   const text = causeMessage(cause).replace(/^webMCP\.\w+: /, '');
+  // Playwright's missing-tool message quotes the requested name and lists the page's own, so it is
+  // recognized by how it starts, before anything below reads the text for a browser diagnostic.
+  if (tool !== undefined && text.startsWith('No WebMCP tool named ')) return new TestError('ACTION_FAILED', `${label}: ${text}`, { cause });
   if (/WebMCP is not enabled/i.test(text)) return withoutWebMcp(label, cause);
   if (tool === undefined) return translatePwError(cause, label);
   if (isNavigationRace(cause)) return unanswered(label, `the page navigated before the tool ${JSON.stringify(tool)} answered; the tool may have run`, cause);
@@ -1057,7 +1060,10 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
           (cause, operationLabel) => translateWebMcpError(cause, operationLabel, called ? name : undefined),
         );
         // A tool that resolves with nothing has no JSON form; `null` is the one JSON value that says so.
-        return (result ?? null) as JsonValue;
+        const value: unknown = result ?? null;
+        // Playwright also carries what JSON cannot hold (a Date, a BigInt, NaN); the return type promises JSON.
+        validateJsonValue(value, `${label}: the tool ${JSON.stringify(name)} ran, and its result`);
+        return value as JsonValue;
       },
     },
   };

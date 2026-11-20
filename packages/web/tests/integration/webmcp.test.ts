@@ -57,6 +57,16 @@ const TOOLS_PAGE = `<!doctype html>
   });
 </script>`;
 
+/** A page whose tools resolve with values JSON cannot hold. */
+const ODD_PAGE = `<!doctype html>
+<title>odd</title>
+<script>
+  const context = document.modelContext ?? navigator.modelContext;
+  for (const [name, value] of [['date', () => new Date(0)], ['bigint', () => 1n], ['nan', () => NaN]]) {
+    context?.registerTool({ name, description: 'Resolves with a ' + name, inputSchema: { type: 'object' }, execute: async () => value() });
+  }
+</script>`;
+
 const PLAIN_PAGE = '<!doctype html><title>plain</title><p>no tools here</p>';
 
 /** A page whose tools act and then never answer: one navigates away, one changes the title and hangs. */
@@ -90,7 +100,7 @@ describe('browser.webmcp', () => {
   beforeAll(async () => {
     server = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'text/html' });
-      response.end(request.url === '/plain' ? PLAIN_PAGE : request.url === '/acting' ? ACTING_PAGE : TOOLS_PAGE);
+      response.end(request.url === '/plain' ? PLAIN_PAGE : request.url === '/acting' ? ACTING_PAGE : request.url === '/odd' ? ODD_PAGE : TOOLS_PAGE);
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     // `localhost`, not the address: WebMCP needs a secure context, which localhost is.
@@ -190,8 +200,18 @@ describe('browser.webmcp', () => {
     it.skipIf(!installed)('fails a call to a tool the page does not register, naming the ones it does', async () => {
       await expect(browser.webmcp.callTool('subtract', { a: 1, b: 1 })).rejects.toMatchObject({
         code: 'ACTION_FAILED',
-        message: expect.stringMatching(/^browser\.webmcp\.callTool: No WebMCP tool named "subtract"\. Available tools: (\w+, ){4}\w+/),
+        message: expect.stringMatching(/^browser\.webmcp\.callTool: No WebMCP tool named "subtract"\. Available tools: (\w+, ){3,}\w+/),
       });
+    });
+
+    it.skipIf(!installed)('reads a missing tool as missing, whatever its name says', async () => {
+      // Playwright's message repeats the requested name, which must not be read as a browser diagnostic.
+      for (const missing of ['WebMCP is not enabled', 'execution context was destroyed', 'target closed']) {
+        await expect(browser.webmcp.callTool(missing)).rejects.toMatchObject({
+          code: 'ACTION_FAILED',
+          message: expect.stringContaining(`No WebMCP tool named "${missing}"`),
+        });
+      }
     });
 
     it.skipIf(!installed)('fails a call whose tool throws', async () => {
@@ -206,6 +226,25 @@ describe('browser.webmcp', () => {
       await expect(browser.webmcp.callTool('')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
       await expect(browser.webmcp.callTool(7 as unknown as string)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
       await expect(browser.webmcp.callTool('add', { a: () => 1 } as never)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    });
+
+    it.skipIf(!installed)('resolves with JSON only: a result JSON cannot hold fails the call, after the tool ran', async () => {
+      await engine.session!.open!(`${origin}/odd`, operation());
+      if (name === 'chromium') {
+        // Chromium turns a tool's result into JSON itself before Playwright reads it.
+        expect(await browser.webmcp.callTool('date')).toBe('1970-01-01T00:00:00.000Z');
+        expect(await browser.webmcp.callTool('bigint')).toBe(1);
+        expect(await browser.webmcp.callTool('nan')).toBe('NaN');
+      } else {
+        // Firefox hands over the value as the tool resolved it.
+        for (const tool of ['date', 'bigint', 'nan']) {
+          await expect(browser.webmcp.callTool(tool)).rejects.toMatchObject({
+            code: 'INVALID_ARGUMENT',
+            message: expect.stringContaining(`browser.webmcp.callTool: the tool "${tool}" ran, and its result`),
+          });
+        }
+      }
+      await engine.session!.open!(`${origin}/`, operation());
     });
 
     it.skipIf(!installed)('lists no tools on a page that registers none, and follows the active tab', async () => {

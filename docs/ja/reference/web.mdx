@@ -911,7 +911,7 @@ export interface WebMcpTool {
 | --- | --- |
 | `UNSUPPORTED_CAPABILITY` | ページに WebMCP がない場合。ブラウザが WebMCP なしで動作しているか、ページがセキュアコンテキストではありません。どちらであるかと対処方法はメッセージに記載されます。 |
 | `ACTION_FAILED` | `callTool`: その名前のツールをページが登録していない場合（登録済みのツールがメッセージに列挙されます）、ツールが例外を投げた場合、またはページの遷移や時間切れによってツールが応答する前に呼び出しが終わった場合。 |
-| `INVALID_ARGUMENT` | `callTool`: `name` が空でない文字列でない場合、または `input` が JSON でない場合。 |
+| `INVALID_ARGUMENT` | `callTool`: `name` が空でない文字列でない場合、`input` が JSON でない場合、またはツールが実行され、JSON で表せない値（`Date`、`BigInt`、`NaN`）で解決した場合。 |
 | `INVALID_CONFIG` | `connect`、ブラウザプロバイダー、または WebKit と `web({ webmcp: true })` を併用した場合。 |
 
 ## ブラウザのインストール
