@@ -638,6 +638,13 @@ describe('lifecycle', () => {
     });
     expect(await first.prepare(2)).toBe(JSON.stringify([{ deviceId: 'C' }, { deviceId: 'B' }]));
 
+    // The next inventory lists a device another session holds ahead of a free one: the slot takes the free one.
+    let foreignLists = 0;
+    const foreign = harness({ device: undefined });
+    foreign.fake.respond('devices.list', () => (++foreignLists === 1 ? free : [device('A'), { ...device('B'), claimedBy: { session: 't3-holder', workspace: '/elsewhere' } }, device('C')]));
+    foreign.fake.respond('devices.boot', refuse(claimed, ['A']));
+    expect(await bound(foreign.prepare(info))).toBe(JSON.stringify([{ deviceId: 'C' }]));
+
     // A launch() host's own session name carries its host id: a device held under that name stays the host's own when
     // its slot moves.
     const host = harness({ device: undefined });
