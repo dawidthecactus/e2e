@@ -217,6 +217,18 @@ return { path: before.replace(/^https?:\\/\\/[^/]+/, ''), inputs: inputs > 0, va
     expect(drafted.text).toContain("\nawait browser.locator('input').first().fill('by selector');\n");
   });
 
+  it('drafts a line a test can run for an object a fixture call awaited for', async () => {
+    const result = await runCode(`const tab = await browser.newTab();
+await tab.activate();
+await tab.close();
+return (await browser.reload()) === undefined;`);
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toMatch(/^Returned: true\n/);
+    const drafted = await call('test_lines');
+    expect(drafted.text).toMatch(/\nconst (newTab\d+) = await browser\.newTab\(\);\nawait \1\.activate\(\);\nawait \1\.close\(\);\nawait browser\.reload\(\);\n/);
+    expect(drafted.text).toContain('async ({ app, screen, browser }) => { ... }');
+  });
+
   it('runs a locator built with or, as a test would', async () => {
     const either = await runCode("await expect(screen.getByRole('button', 'Increment').or(screen.getByRole('button', 'Nowhere'))).toBeVisible();");
     expect(either.isError, either.text).toBe(false);

@@ -204,11 +204,11 @@ return [title, width, String(browser.keyboard), typeof device];`,
     expect(result.error).toBeUndefined();
     expect(result.value).toEqual(['Home', 800, 'browser.keyboard', 'undefined']);
     expect(sent).toEqual([
-      { base: { root: 'browser' }, path: ['evaluate'], args: [{ t: 'function', s: '(selector) => document.title' }, { t: 'value', v: 'h1' }], source: "browser.evaluate((selector) => document.title, 'h1')" },
-      { base: { root: 'browser' }, path: ['locator'], args: [{ t: 'value', v: '.row' }], source: "browser.locator('.row')" },
-      { base: { handle: 2 }, path: ['first'], args: [], source: "browser.locator('.row').first()" },
-      { base: { handle: 3 }, path: ['click'], args: [{ t: 'object', v: [['force', { t: 'value', v: true }]] }], source: "browser.locator('.row').first().click({ force: true })" },
-      { base: { root: 'browser' }, path: ['viewport', 'width'], source: 'browser.viewport.width' },
+      { base: { root: 'browser' }, path: ['evaluate'], args: [{ t: 'function', s: '(selector) => document.title' }, { t: 'value', v: 'h1' }] },
+      { base: { root: 'browser' }, path: ['locator'], args: [{ t: 'value', v: '.row' }] },
+      { base: { handle: 2 }, path: ['first'], args: [] },
+      { base: { handle: 3 }, path: ['click'], args: [{ t: 'object', v: [['force', { t: 'value', v: true }]] }] },
+      { base: { root: 'browser' }, path: ['viewport', 'width'] },
     ]);
   });
 
@@ -285,6 +285,56 @@ expect('abc').toMatch(pattern);`);
     expect(settled).toBe(1);
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(started).toHaveLength(1);
+  });
+
+  it('fails the call for a failure that settled early and the code never waited on', async () => {
+    const missing = (source: string): LineReply => (source.includes('Missing') ? { ok: false, code: 'LOCATOR_NOT_FOUND', message: 'no nodes' } : { ok: true, value: null });
+    const ignored = await run("screen.getByText('Missing').tap();\nawait new Promise((resolve) => setTimeout(resolve, 80));\nreturn 'done';", missing);
+    expect(ignored.error).toEqual({ code: 'LOCATOR_NOT_FOUND', message: 'LOCATOR_NOT_FOUND: no nodes' });
+    const later = await run("const tap = screen.getByText('Missing').tap();\nawait new Promise((resolve) => setTimeout(resolve, 80));\ntry { await tap; } catch (error) { return error.code; }", missing);
+    expect(later.error).toBeUndefined();
+    expect(later.value).toBe('LOCATOR_NOT_FOUND');
+  });
+
+  it('gives undefined back as undefined, and null as null', async () => {
+    const ran = await run("return [(await app.open('/')) === undefined, (await screen.getByText('Row').getAttribute('x')) === null];", (source) =>
+      source.includes('getAttribute') ? { ok: true, value: null } : { ok: true, value: undefined },
+    );
+    expect(ran.value).toEqual([true, true]);
+  });
+
+  it('holds nothing open behind a cleared timer', async () => {
+    const started = Date.now();
+    const ran = await run('const id = setTimeout(() => { throw new Error("fired"); }, 5000); setTimeout(() => clearTimeout(id), 50); return 1;');
+    expect(ran.error).toBeUndefined();
+    expect(ran.value).toBe(1);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('refuses a value a line or a matcher cannot take, by name', async () => {
+    for (const [code, message] of [
+      ["await screen.getByLabel('Plan').fill(new Date(0));", 'INVALID_ARGUMENT: an object that is not plain, such as a Date or a Map, is not an argument a test line takes; pass a string, number, plain object, or array'],
+      ["expect('10').toBeGreaterThan(2);", 'ASSERTION_FAILED: toBeGreaterThan requires a number, got 10'],
+      ['expect(5).toHaveLength(1);', 'ASSERTION_FAILED: toHaveLength requires a value with a numeric length, got 5'],
+      ['expect(Array(1)).toEqual([42]);', 'ASSERTION_FAILED: expected [null] to equal [42]'],
+    ] as const) {
+      const ran = await run(code);
+      expect(ran.error?.message, code).toBe(message);
+      expect(ran.lines, code).toEqual([]);
+    }
+  });
+
+  it('keeps a fixture whose name is a reserved word out of scope, and refuses expect on a fixture object', async () => {
+    const result = await runInSandbox({
+      code: "await app.open('/');\ntry { await expect(browser.locator('h1')).toBeVisible(); } catch (error) { return error.message; }",
+      line: () => Promise.resolve({ ok: true, value: undefined }),
+      fixtures: ['default', 'browser'],
+      call: () => Promise.resolve({ ok: true, handle: 0 }),
+      signal: undefined,
+      timeoutMs: 30_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.value).toBe("INVALID_ARGUMENT: expect takes a locator of screen or a value, and browser.locator('h1') is an object of the engine fixture; await one of its own reads and expect the value");
   });
 
   it('waits with setTimeout', async () => {

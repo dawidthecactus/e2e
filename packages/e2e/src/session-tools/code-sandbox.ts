@@ -11,6 +11,7 @@
  * call on it goes to the host as a member path and data (`code-fixtures.ts`).
  */
 
+import { Script } from 'node:vm';
 import { z } from 'zod';
 import { SURFACE } from './code-surface.ts';
 
@@ -76,17 +77,23 @@ const __lit = (value, loose) => {
     __refuse('a function is not an argument a test line takes');
   }
   if (Array.isArray(value)) return '[' + value.map((item) => __lit(item, loose)).join(', ') + ']';
+  if (typeof value === 'object' && ![Object.prototype, null].includes(Object.getPrototypeOf(value))) __refuse('an object that is not plain, such as a Date or a Map, is not an argument a test line takes; pass a string, number, plain object, or array');
   if (typeof value === 'object') return '{ ' + Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => (/^[A-Za-z_$][\\w$]*$/.test(key) ? key : __quote(key)) + ': ' + __lit(item, loose)).join(', ') + ' }';
   __refuse('a ' + typeof value + ' is not an argument a test line takes');
 };
 const __args = (values, loose) => { while (values.length > 0 && values[values.length - 1] === undefined) values.pop(); return values.map((value) => __lit(value, loose)).join(', '); };
 const __aliases = new Map(Object.entries(${JSON.stringify(ALIASES)}));
 const __pending = new Set();
+const __sent = [];
+// What a line gives the code is not a Promise but something awaitable, so that a line the code never waited on is known:
+// its failure reached nothing in the code, and fails the call when the code ends.
 const __track = (sent) => {
-  __pending.add(sent);
-  const settled = () => { __pending.delete(sent); };
-  sent.then(settled, settled);
-  return sent;
+  const record = { failed: false, reason: undefined, seen: false, late: false, done: undefined };
+  __sent.push(record);
+  __pending.add(record);
+  record.done = sent.then(() => { __pending.delete(record); }, (reason) => { __pending.delete(record); record.failed = true; record.reason = reason; });
+  const seen = () => { record.seen = true; return sent; };
+  return { then: (onValue, onError) => seen().then(onValue, onError), catch: (onError) => seen().catch(onError), finally: (onDone) => seen().finally(onDone) };
 };
 const __reply = (reply) => {
   if (reply.ok) return reply;
@@ -115,11 +122,12 @@ const __send = (source) => __track((async () => __reply(await __inTurn(() => __l
 // where they left it. Answers the first failure among them: nothing in the code was there to catch it.
 const __settle = async () => {
   if (__pending.size > 0) __logs.push(String(__pending.size) + ' call(s) on the app were not awaited when the code ended; they ran, but await each one so a failure stops the code.');
-  const lost = [];
   while (__pending.size > 0 || __timers.size > 0) {
-    for (const line of await Promise.allSettled([...__pending])) if (line.status === 'rejected') lost.push(line.reason);
+    for (const record of __pending) record.late = true;
+    await Promise.all([...__pending].map((record) => record.done));
     await Promise.all([...__timers.values()]);
   }
+  const lost = __sent.filter((record) => record.failed && (record.late || !record.seen)).map((record) => record.reason);
   return [...lost, ...__thrown][0];
 };
 const __chain = (source, ends) => new Proxy(function () {}, {
@@ -150,7 +158,7 @@ const __same = (a, b) => {
   for (const value of [a, b]) if (value instanceof Map || value instanceof Set) __refuse('expect(value) compares plain data here; turn a Map or Set into an array first');
   if (a instanceof RegExp || b instanceof RegExp) return a instanceof RegExp && b instanceof RegExp && a.source === b.source && a.flags === b.flags;
   if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && a.getTime() === b.getTime();
-  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => __same(item, b[index]));
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && Array.from(a, (item, index) => __same(item, b[index])).every(Boolean);
   const keys = (object) => Object.keys(object).filter((key) => object[key] !== undefined);
   return keys(a).length === keys(b).length && keys(a).every((key) => Object.hasOwn(b, key) && __same(a[key], b[key]));
 };
@@ -166,17 +174,18 @@ const __matches = (actual, expected) => {
 };
 const __values = (actual, negated) => {
   const check = (pass, message) => { if (pass === negated) __fail('expected ' + __show(actual) + (negated ? ' not ' : ' ') + message); };
+  const number = (name) => (typeof actual === 'number' ? actual : __fail(name + ' requires a number, got ' + __show(actual)));
+  const length = () => (actual != null && (typeof actual === 'object' || typeof actual === 'string' || typeof actual === 'function') && typeof actual.length === 'number' ? actual.length : __fail('toHaveLength requires a value with a numeric length, got ' + __show(actual)));
   return {
     toBe: (expected) => check(Object.is(actual, expected), 'to be ' + __show(expected)),
     toEqual: (expected) => check(__same(actual, expected), 'to equal ' + __show(expected)),
-    toStrictEqual: (expected) => check(__same(actual, expected), 'to equal ' + __show(expected)),
     toContain: (expected) => check(__contains(actual, expected), 'to contain ' + __show(expected)),
     toMatch: (expected) => check(__matches(actual, expected), 'to match ' + String(expected)),
-    toHaveLength: (expected) => check(actual != null && actual.length === expected, 'to have length ' + String(expected)),
-    toBeGreaterThan: (expected) => check(actual > expected, 'to be greater than ' + __show(expected)),
-    toBeGreaterThanOrEqual: (expected) => check(actual >= expected, 'to be at least ' + __show(expected)),
-    toBeLessThan: (expected) => check(actual < expected, 'to be less than ' + __show(expected)),
-    toBeLessThanOrEqual: (expected) => check(actual <= expected, 'to be at most ' + __show(expected)),
+    toHaveLength: (expected) => check(length() === expected, 'to have length ' + String(expected)),
+    toBeGreaterThan: (expected) => check(number('toBeGreaterThan') > expected, 'to be greater than ' + __show(expected)),
+    toBeGreaterThanOrEqual: (expected) => check(number('toBeGreaterThanOrEqual') >= expected, 'to be greater than or equal to ' + __show(expected)),
+    toBeLessThan: (expected) => check(number('toBeLessThan') < expected, 'to be less than ' + __show(expected)),
+    toBeLessThanOrEqual: (expected) => check(number('toBeLessThanOrEqual') <= expected, 'to be less than or equal to ' + __show(expected)),
     toBeTruthy: () => check(Boolean(actual), 'to be truthy'),
     toBeFalsy: () => check(!actual, 'to be falsy'),
     toBeNull: () => check(actual === null, 'to be null'),
@@ -185,6 +194,7 @@ const __values = (actual, negated) => {
   };
 };
 const expect = (actual) => {
+  if (typeof actual === 'function' && typeof actual.__text === 'string') __refuse('expect takes a locator of screen or a value, and ' + actual.__text + ' is an object of the engine fixture; await one of its own reads and expect the value');
   if (actual == null || typeof actual.__src !== 'string') return { ...__values(actual, false), not: __values(actual, true) };
   const matchers = (prefix) => new Proxy({}, {
     get: (_, name) => {
@@ -218,7 +228,7 @@ const __request = (base, path, values, text) => __track((async () => {
     from = { handle: held.__handle };
   }
   const args = values === undefined ? undefined : values.map(__encode);
-  const reply = __reply(await __inTurn(() => __e2e.call(JSON.stringify({ base: from, path, args, source: text }))));
+  const reply = __reply(await __inTurn(() => __e2e.call(JSON.stringify({ base: from, path, args }))));
   return reply.handle === undefined ? reply.value : __remote({ handle: reply.handle }, text, []);
 })());
 const __told = (text) => (name) => (name === '__text' ? text : name === Symbol.toPrimitive || name === 'toString' || name === 'valueOf' ? () => text : undefined);
@@ -259,14 +269,21 @@ const __log = (...values) => { __logs.push(values.map(__show).join(' ')); };
 const __console = { log: __log, info: __log, debug: __log, warn: __log, error: __log };
 // A timer's callback runs with nothing awaiting it, so what it throws is kept for the program's end.
 const __timers = new Map();
+const __cleared = new Set();
 const __thrown = [];
 let __timer = 0;
 const __setTimeout = (callback, ms, ...values) => {
   const id = ++__timer;
-  __timers.set(id, __sleep(Number(ms) || 0).then(() => (__timers.has(id) ? callback(...values) : undefined)).catch((error) => { __thrown.push(error); }).finally(() => { __timers.delete(id); }));
+  __timers.set(id, __e2e.sleep(Number(ms) || 0, id).then(() => (__cleared.delete(id) ? undefined : callback(...values))).catch((error) => { __thrown.push(error); }).finally(() => { __timers.delete(id); }));
   return id;
 };
-const __clearTimeout = (id) => { __timers.delete(id); };
+// The host ends the wait at once, so a cleared timer holds nothing open.
+const __clearTimeout = (id) => {
+  if (!__timers.has(id) || __cleared.has(id)) return;
+  __cleared.add(id);
+  const woken = __e2e.wake(id).catch(() => {}).finally(() => { __timers.delete(woken); });
+  __timers.set(woken, woken);
+};
 `;
 
 /** What the program returns, as its own last lines write it. */
@@ -281,13 +298,22 @@ const scope = (fixtures: readonly string[]): string => ['screen', 'app', ...fixt
 
 /** What the program puts ahead of the code, up to the line the code starts on. */
 const head = (fixtures: readonly string[]): string => `const __line = (source) => __e2e.line(source);
-const __sleep = (ms) => __e2e.sleep(ms);
 ${PRELUDE}
 try {
   const __value = await (async (${['console', 'setTimeout', 'clearTimeout', ...fixtures].join(', ')}) => {
 `;
 const HEAD_LINES = head([]).split('\n').length - 1;
-const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+/** Whether a fixture's name can be a parameter of the code's function: an identifier that is no reserved word. */
+function bindable(name: string): boolean {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return false;
+  try {
+    // Compiled, never run: the parser is what knows the reserved words.
+    return new Script(`async (${name}) => 0`) instanceof Script;
+  } catch {
+    return false;
+  }
+}
 
 /** The guest's program around the code: its value or its error, with what it logged either way, as JSON. */
 function program(code: string, fixtures: readonly string[]): string {
@@ -320,14 +346,28 @@ export async function runInSandbox(options: SandboxOptions): Promise<SandboxResu
     queue = reply.catch(() => undefined);
     return reply;
   };
-  const fixtures = (options.fixtures ?? []).filter((name) => IDENTIFIER.test(name));
-  const sleep = (ms: unknown): Promise<null> =>
-    new Promise((resolve) => setTimeout(() => resolve(null), Math.min(Math.max(typeof ms === 'number' ? ms : 0, 0), MAX_SLEEP_MS)));
+  const fixtures = (options.fixtures ?? []).filter(bindable);
+  // A wait the code can end early: clearTimeout wakes it, so no request stays open behind a cleared timer.
+  const sleeps = new Map<unknown, () => void>();
+  const sleep = (ms: unknown, id: unknown): Promise<null> =>
+    new Promise((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        sleeps.delete(id);
+        resolve(null);
+      };
+      const timer = setTimeout(done, Math.min(Math.max(typeof ms === 'number' ? ms : 0, 0), MAX_SLEEP_MS));
+      sleeps.set(id, done);
+    });
+  const wake = (id: unknown): Promise<null> => {
+    sleeps.get(id)?.();
+    return Promise.resolve(null);
+  };
   const restoreWarnings = withoutTypeStrippingWarning();
   try {
     const result = await run<string>({
       source: program(options.code, fixtures),
-      hostFunctions: { __e2e: { line: queued(options.line), call: queued(options.call), sleep } },
+      hostFunctions: { __e2e: { line: queued(options.line), call: queued(options.call), sleep, wake } },
       ...(options.signal === undefined ? {} : { abortSignal: options.signal }),
       limits: {
         timeoutMs: options.timeoutMs,

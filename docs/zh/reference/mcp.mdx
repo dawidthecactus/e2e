@@ -217,9 +217,8 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 
 ```txt
 Returned: [12.5,18,24]
-Test lines: 2.
-1. await screen.getByRole('listitem').allTextContents(); -> ["Mug $12.50", ...]
-2. await expect(screen.getByRole('listitem')).toHaveCount(12);
+Test lines: 2, 1 read not listed.
+1. await expect(screen.getByRole('listitem')).toHaveCount(12);
 ```
 
 - 变量、循环、条件语句、`try`/`catch`、函数和 JavaScript 内置对象均可使用。`return` 一个 JSON 值即可将其取回。`console.log` 输出的内容也会返回。
@@ -229,7 +228,8 @@ Test lines: 2.
 - 请对每行代码使用 `await`。如果某行失败，在它之后未等待它就创建的代码行不会运行；没有任何地方 `await` 的失败会使调用失败。`setTimeout` 回调抛出的错误也是如此。
 - 运行前只会发现语法错误。语法拒绝的代码行在代码执行到它时才失败，此时它之前的代码行已经运行。
 - 结果会列出已运行的代码行。当代码没有返回值也没有输出日志时，读取操作的值也会显示在那里；否则请用 `return` 返回该值。
-- 通过的代码行（读取操作除外）会按执行顺序加入 [`test_lines`](#test_lines) 草稿。
+- 通过的代码行（读取操作除外）会按执行顺序加入 [`test_lines`](#test_lines) 草稿。对引擎测试夹具的调用如果返回值，即使它改变了页面，也按读取操作处理。调用通过 `await` 得到的对象（例如新标签页）会有一行为它命名的 `const` 代码。
+- 代码在运行前按 TypeScript 读取。看起来像类型参数的比较（例如 `[x < y, x > (y)]`）会失败，请加上括号。
 - `expect(value)` 检查代码持有的值，可使用 `toBe`、`toEqual`、`toContain`、`toMatch`、`toHaveLength`、比较匹配器和 `.not`。
 - 每行代码最多等待 `timeout`，包括它自己的 `timeout` 选项。如果配置中的 [`actionTimeout`](/reference/config#actiontimeout) 和 [`assertionTimeout`](/reference/config#assertiontimeout) 更短，则使用更短的值。此上限也涵盖 `app.open`、`app.restart` 和 `app.clearState`，因此首次加载较慢或设备重新启动时应增大它。
 - `setTimeout` 每次调用最多等待 10 秒。`clearTimeout` 可取消它。

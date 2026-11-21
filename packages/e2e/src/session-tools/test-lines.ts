@@ -185,7 +185,7 @@ export class SessionTestLines {
   /** Records statements `run_code` ran and passed, already in a test's own words, each awaited and ended as a test line. */
   ran(sources: readonly string[]): void {
     for (const source of sources) {
-      this.entries.push({ tool: 'run_code', line: `${source.startsWith('await ') ? '' : 'await '}${source}${source.endsWith(';') ? '' : ';'}` });
+      this.entries.push({ tool: 'run_code', line: `${/^(?:await|const) /.test(source) ? '' : 'await '}${source}${source.endsWith(';') ? '' : ';'}` });
     }
   }
 
@@ -218,7 +218,7 @@ export class SessionTestLines {
     // A session that ran a test holds only what came after it: the test's own lines are in its file.
     const [lead, place] =
       testRan === undefined
-        ? [`Draft test body from this session's actions, ${count}:`, 'Paste it into a test body, async ({ app, screen }) => { ... },']
+        ? [`Draft test body from this session's actions, ${count}:`, `Paste it into a test body, async ({ ${fixturesIn(body).join(', ')} }) => { ... },`]
         : [`Test lines from this session's actions after test ${testRan} stopped, ${count}:`, 'Put them in that test where it stopped, in place of the line that failed or after its last line,'];
     return [
       lead,
@@ -660,4 +660,11 @@ function stringField(input: Readonly<Record<string, unknown>>, key: string): str
 /** Whether a tool's input is an object to read arguments from. */
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
+}
+
+/** The fixtures a draft's lines start from, `app` and `screen` first, so the test body asks for each one. */
+function fixturesIn(body: readonly string[]): readonly string[] {
+  const declared = new Set(body.flatMap((line) => /^const ([A-Za-z_$][\w$]*) = /.exec(line)?.[1] ?? []));
+  const named = body.flatMap((line) => /^(?:const [A-Za-z_$][\w$]* = )?await (?:expect\()?([A-Za-z_$][\w$]*)[.(]/.exec(line)?.[1] ?? []);
+  return [...new Set(['app', 'screen', ...named.filter((name) => !declared.has(name))])];
 }

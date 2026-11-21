@@ -217,9 +217,8 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 
 ```txt
 Returned: [12.5,18,24]
-Test lines: 2.
-1. await screen.getByRole('listitem').allTextContents(); -> ["Mug $12.50", ...]
-2. await expect(screen.getByRole('listitem')).toHaveCount(12);
+Test lines: 2, 1 read not listed.
+1. await expect(screen.getByRole('listitem')).toHaveCount(12);
 ```
 
 - 変数、ループ、条件分岐、`try`/`catch`、関数、JavaScript の組み込み機能を使えます。JSON の値を `return` すると、その値が返ります。`console.log` の行も返ります。
@@ -229,7 +228,8 @@ Test lines: 2.
 - 各行を `await` してください。待たずに作った行は、その前の行が失敗すると実行しません。どこでも `await` していない失敗は、呼び出しを失敗させます。`setTimeout` のコールバックが投げたエラーも同じです。
 - 実行前に見つかるのは構文エラーだけです。文法が拒否する行は、コードがその行に到達した時点で失敗し、それより前の行は実行済みです。
 - 結果には実行した行を一覧表示します。コードが何も返さず、何もログに出さない場合、読み取りの値もそこに表示します。それ以外では、値を `return` してください。
-- 成功した行は、読み取りを除き、実行順に [`test_lines`](#test_lines) の下書きへ追加します。
+- 成功した行は、読み取りを除き、実行順に [`test_lines`](#test_lines) の下書きへ追加します。エンジンのフィクスチャへの呼び出しが値を返した場合は、ページを変更していても読み取りとして扱います。新しいタブのように、呼び出しが `await` して得たオブジェクトには、名前を付ける `const` の行を追加します。
+- コードは実行前に TypeScript として読み取ります。`[x < y, x > (y)]` のように型引数と読める比較は失敗します。括弧で囲んでください。
 - `expect(value)` は、コードが持つ値を確認します。`toBe`、`toEqual`、`toContain`、`toMatch`、`toHaveLength`、比較のマッチャー、`.not` を使えます。
 - 各行の待機時間は、自身の `timeout` オプションを含め、最大 `timeout` です。設定の [`actionTimeout`](/reference/config#actiontimeout) と [`assertionTimeout`](/reference/config#assertiontimeout) がより短ければ、そちらを適用します。この上限は `app.open`、`app.restart`、`app.clearState` にも適用するため、初回読み込みやデバイス上でのアプリの再起動が遅い場合は増やしてください。
 - `setTimeout` は 1 回の呼び出しにつき最大 10 秒待機します。`clearTimeout` で取り消せます。

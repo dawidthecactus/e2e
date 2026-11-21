@@ -180,7 +180,7 @@ export class SessionHost {
     const { attach, target, config, test, engine, app } = options;
     const headed = attach === undefined ? options.headed ?? this.options.headed : false;
     const usage = new SessionUsage(this.sessions.liveCount, headed, attach !== undefined);
-    const clash = attach === undefined ? undefined : Object.entries({ target, config, test, engine, app, headed: options.headed })
+    const clash = attach === undefined ? undefined : Object.entries({ target, config, test, engine, app, path: options.path, headed: options.headed })
       .find(([, value]) => value !== undefined)?.[0];
 
     const opening = clash === undefined

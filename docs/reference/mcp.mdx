@@ -271,9 +271,8 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 
 ```txt
 Returned: [12.5,18,24]
-Test lines: 2.
-1. await screen.getByRole('listitem').allTextContents(); -> ["Mug $12.50", ...]
-2. await expect(screen.getByRole('listitem')).toHaveCount(12);
+Test lines: 2, 1 read not listed.
+1. await expect(screen.getByRole('listitem')).toHaveCount(12);
 ```
 
 - Variables, loops, conditionals, `try`/`catch`, functions, and the
@@ -298,7 +297,11 @@ Test lines: 2.
 - The result lists the lines that ran. A read shows its value there when the
   code returns nothing and logs nothing. Otherwise `return` the value.
 - The lines that pass, except reads, join the [`test_lines`](#test_lines)
-  draft in the order they ran.
+  draft in the order they ran. A call on the engine's fixture that returns a
+  value counts as a read, also when it changed the page. An object a call
+  awaited for, such as a new tab, gets a `const` line that names it.
+- The code is read as TypeScript before it runs. A comparison that reads as
+  type arguments, such as `[x < y, x > (y)]`, fails. Put it in parentheses.
 - `expect(value)` checks a value the code holds, with `toBe`, `toEqual`,
   `toContain`, `toMatch`, `toHaveLength`, the comparisons, and `.not`.
 - Each line waits at most `timeout`, its own `timeout` option included.

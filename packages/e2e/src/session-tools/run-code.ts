@@ -171,7 +171,7 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
       if (runtime.config.allSecrets.size > 0) refuseLocatorByPart(statement);
       const value = await budget.capped(wait(), () => runner.run(statement));
       outcomes.push({ source: statement.source, read: isRead(statement), value });
-      return { ok: true, value: value ?? null };
+      return { ok: true, value };
     } catch (cause) {
       const error = classifyError(cause);
       outcomes.push({ source, error });
@@ -184,12 +184,16 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
     let source = 'a call on an engine fixture';
     try {
       const request = parseFixtureRequest(payload);
-      source = `await ${request.source};`;
+      source = `await ${fixtures.describe(request)};`;
       const settled = await budget.capped(wait(), () => fixtures.run(request));
-      // An object the host keeps is a step on the way to a call, not a line of its own.
-      if ('handle' in settled) return { ok: true, handle: settled.handle };
+      if ('handle' in settled) {
+        // An object the host keeps is a step on the way to a call; the line is the one that names it, when a test needs a name.
+        if (settled.declared !== undefined) outcomes.push({ source: settled.declared, read: false, value: undefined });
+        return { ok: true, handle: settled.handle };
+      }
+      // A call that gives a value back is taken for a read: nothing here says whether it also changed the app.
       outcomes.push({ source, read: settled.value !== undefined, value: settled.value });
-      return { ok: true, value: settled.value ?? null };
+      return { ok: true, value: settled.value };
     } catch (cause) {
       const error = classifyError(cause);
       outcomes.push({ source, error });

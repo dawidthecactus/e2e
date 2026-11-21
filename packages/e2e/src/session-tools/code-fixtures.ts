@@ -40,18 +40,20 @@ const REQUEST = z.object({
   path: z.array(z.string()),
   /** Present for a call, absent for a read of the member at `path`. */
   args: z.array(ENCODED).optional(),
-  /** The expression as the code wrote it, for the result's listing and `test_lines`. */
-  source: z.string(),
 });
 
 export type FixtureRequest = z.infer<typeof REQUEST>;
 
 /** What a call came to: plain data, or the number of an object kept on the host. */
-export type FixtureResult = { readonly value: unknown } | { readonly handle: number };
+export type FixtureResult =
+  | { readonly value: unknown }
+  /** `declared` is the line that names the object in a test, when a call awaited to get it. */
+  | { readonly handle: number; readonly declared?: string | undefined };
 
 /** Members every object or function inherits, which lead out of the fixture to the host. */
 const INHERITED = new Set(['constructor', '__proto__', 'prototype']);
 const MAX_DEPTH = 50;
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 export function parseFixtureRequest(payload: string): FixtureRequest {
   const parsed = REQUEST.safeParse(JSON.parse(payload));
@@ -61,7 +63,7 @@ export function parseFixtureRequest(payload: string): FixtureRequest {
 
 /** The engine fixtures of one `run_code` call, and the objects its calls returned. */
 export class FixtureCalls {
-  private readonly handles: object[] = [];
+  private readonly handles: { readonly object: object; readonly text: string }[] = [];
 
   constructor(
     /** Reads a fixture by its name; `undefined` for a name the engine does not contribute. */
@@ -69,19 +71,28 @@ export class FixtureCalls {
     private readonly redact: (text: string) => string,
   ) {}
 
+  /** The expression a request spells, as a test would write it; one on an object this call does not hold is refused. */
+  describe(request: FixtureRequest): string {
+    const { base, path, args } = request;
+    const start = 'root' in base ? base.root : this.handles[base.handle]?.text;
+    if (start === undefined) throw new TestError('INVALID_ARGUMENT', 'run_code: a call is on an object from an earlier run_code call; get it again in this one');
+    const read = [start, ...path].join('.');
+    return args === undefined ? read : `${read}(${args.map((arg) => spell(arg, (id) => this.handles[id]?.text ?? 'undefined')).join(', ')})`;
+  }
+
   async run(request: FixtureRequest): Promise<FixtureResult> {
     const { path, args } = request;
-    let receiver: unknown = 'root' in request.base ? this.root(request.base.root) : this.handles[request.base.handle];
-    if (receiver === undefined) throw new TestError('INVALID_ARGUMENT', `run_code: ${request.source} starts from nothing this session has`);
+    const source = this.describe(request);
+    let receiver: unknown = 'root' in request.base ? this.root(request.base.root) : this.handles[request.base.handle]?.object;
+    if (receiver === undefined) throw new TestError('INVALID_ARGUMENT', `run_code: ${source} starts from nothing this session has`);
     const read = args === undefined ? path : path.slice(0, -1);
-    for (const name of read) receiver = member(receiver, name, request.source);
-    if (args === undefined) return this.result(await receiver);
+    for (const name of read) receiver = member(receiver, name, source);
+    if (args === undefined) return this.result(receiver, source, path.at(-1));
     const name = path.at(-1);
     // With no member named, the call is on a function an earlier call returned, such as what takes a handler off.
-    const method = name === undefined ? receiver : member(receiver, name, request.source);
-    if (typeof method !== 'function') throw new TestError('INVALID_ARGUMENT', `run_code: ${request.source} calls what is not a function`);
-    const value: unknown = await Reflect.apply(method, name === undefined ? undefined : receiver, args.map((arg) => this.argument(arg)));
-    return this.result(value);
+    const method = name === undefined ? receiver : member(receiver, name, source);
+    if (typeof method !== 'function') throw new TestError('INVALID_ARGUMENT', `run_code: ${source} calls what is not a function`);
+    return this.result(Reflect.apply(method, name === undefined ? undefined : receiver, args.map((arg) => this.argument(arg))), source, name);
   }
 
   private argument(encoded: Encoded): unknown {
@@ -95,7 +106,7 @@ export class FixtureCalls {
       case 'function':
         return sourceOnly(encoded.s);
       case 'handle': {
-        const held = this.handles[encoded.id];
+        const held = this.handles[encoded.id]?.object;
         if (held === undefined) throw new TestError('INVALID_ARGUMENT', 'run_code: an argument is an object from an earlier run_code call; get it again in this one');
         return held;
       }
@@ -110,10 +121,24 @@ export class FixtureCalls {
     }
   }
 
-  private result(value: unknown): FixtureResult {
+  /**
+   * Plain data goes back as itself. Another object stays here: one a call
+   * returned at once, such as a locator, is spelled in later lines by the call
+   * that made it, and one a call awaited for, such as a new tab, by a name,
+   * since a test cannot chain on a promise or make the object twice.
+   */
+  private async result(returned: unknown, text: string, name: string | undefined): Promise<FixtureResult> {
+    const awaited = isThenable(returned);
+    const value: unknown = await returned;
     if (isData(value, 0)) return { value: this.redacted(value) };
-    this.handles.push(value as object);
-    return { handle: this.handles.length - 1 };
+    const handle = this.handles.length;
+    if (!awaited) {
+      this.handles.push({ object: value as object, text });
+      return { handle };
+    }
+    const named = `${name !== undefined && IDENTIFIER.test(name) ? name : 'object'}${String(handle + 1)}`;
+    this.handles.push({ object: value as object, text: named });
+    return { handle, declared: `const ${named} = await ${text};` };
   }
 
   private redacted(value: unknown): unknown {
@@ -122,6 +147,26 @@ export class FixtureCalls {
     if (Array.isArray(value)) return value.map((item) => this.redacted(item));
     if (typeof value !== 'object' || value === null) return value;
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [this.redact(key), this.redacted(item)]));
+  }
+}
+
+/** An argument as a test would write it. */
+function spell(encoded: Encoded, handle: (id: number) => string): string {
+  switch (encoded.t) {
+    case 'undefined':
+      return 'undefined';
+    case 'value':
+      return typeof encoded.v === 'string' ? `'${encoded.v.replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r')}'` : String(encoded.v);
+    case 'function':
+      return encoded.s;
+    case 'regex':
+      return `/${encoded.s}/${encoded.f}`;
+    case 'handle':
+      return handle(encoded.id);
+    case 'array':
+      return `[${encoded.v.map((item) => spell(item, handle)).join(', ')}]`;
+    case 'object':
+      return `{ ${encoded.v.map(([key, item]) => `${IDENTIFIER.test(key) ? key : JSON.stringify(key)}: ${spell(item, handle)}`).join(', ')} }`;
   }
 }
 
@@ -136,6 +181,10 @@ function member(owner: unknown, name: string, source: string): unknown {
     return Reflect.get(owner, name);
   }
   throw new TestError('INVALID_ARGUMENT', `run_code: "${name}" in ${source} is not a member the fixture has`);
+}
+
+function isThenable(value: unknown): boolean {
+  return (typeof value === 'object' || typeof value === 'function') && value !== null && typeof Reflect.get(value, 'then') === 'function';
 }
 
 /** A function that only gives its source, as a page function is read; the host never runs the code's own functions. */

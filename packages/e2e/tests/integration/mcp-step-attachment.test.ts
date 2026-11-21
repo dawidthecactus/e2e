@@ -301,6 +301,7 @@ describe('MCP attachments to held tests', { timeout: 60_000 }, () => {
       test: 'checkout',
       engine: '@e2e-dev/web',
       app: {},
+      path: '/echo',
       headed: false,
     };
 
