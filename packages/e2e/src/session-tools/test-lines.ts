@@ -370,7 +370,8 @@ export class SessionTestLines {
    * node's own fields that matches it alone; else the query that matched it
    * among its twins, kept to the nodes that render or scoped under a
    * container that tells them apart; else that query by position, with a
-   * comment saying so, when its place among the twins is certain.
+   * comment saying so, when its place among the twins is certain. A node
+   * with no field to query is found by its role the same way.
    */
   private async locator(id: string | undefined): Promise<Found> {
     if (id === undefined) return { reason: 'the action names no node' };
@@ -400,11 +401,14 @@ export class SessionTestLines {
     }
     // The tree an observation hands over carries no test id; the node the
     // locator engine read does, found among the matches of its role.
+    let byRole: { readonly located: Located; readonly probe: Probe } | undefined;
     if (match === undefined && node.role !== undefined && ROLES.has(node.role)) {
-      const probe = await attempt(this.options.query({ role: node.role }).expression);
+      const located = this.options.query({ role: node.role });
+      const probe = await attempt(located.expression);
       if (probe !== undefined && probe.index >= 0) {
         match = probe.matches[probe.index];
         matchCertain = probe.certain;
+        byRole = { located, probe };
       }
     }
     // Only a match placed for certain lends its test id: one its box alone
@@ -414,6 +418,14 @@ export class SessionTestLines {
       const located = this.options.query({ testId });
       const probe = await attempt(located.expression);
       if (probe !== undefined && probe.count === 1 && probe.matches[0]?.testId === match?.testId) return located;
+    }
+    // A control nothing names is found by its role: alone when it is the
+    // only one, else told from the others of its role as named twins are.
+    if (queries.length === 0 && byRole !== undefined) {
+      if (byRole.probe.count === 1 && byRole.probe.index === 0) {
+        return { ...byRole.located, comment: `the only ${node.role ?? 'node'} on the screen, found by its role alone; a name or test id holds up better` };
+      }
+      twins = byRole;
     }
     if (twins === undefined) {
       if (tries <= 0) return { reason: `no locator found it alone within ${String(MAX_TRIES)} tries; try locate` };

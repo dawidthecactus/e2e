@@ -337,6 +337,9 @@ Test line: await screen.getByRole("button", "Sign in").tap();
   (`.nth(1)`, with a comment saying so). A position is used only when the
   live twins are the ones the observation listed, each in place or all
   moved together.
+- A control with no name, label, placeholder, text, or test id is found by
+  its role: alone when it is the only one (`getByRole("spinbutton")`, with
+  a comment), else narrowed like twins.
 - At most 10 locators are tried per target. On a device each try reads the
   whole screen.
 - When nothing reaches the target alone, the result says `No test line:`
