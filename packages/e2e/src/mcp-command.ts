@@ -16,7 +16,7 @@ import { serveMcp, type ServeOptions } from './mcp/server.ts';
 import { processSecrets } from '@e2e-dev/core/lib/run/secrecy';
 import { warnOfNodeDebug } from './run/node-debug.ts';
 import { claimStrayRejection } from './run/standalone-test.ts';
-import { claimRunCodeRejection } from './session-tools/code-strays.ts';
+import { claimLateRunCodeRejection, claimRunCodeRejection } from './session-tools/code-strays.ts';
 import { mcpSessionEvent } from './telemetry/events.ts';
 import type { Telemetry } from './telemetry/telemetry.ts';
 
@@ -106,8 +106,10 @@ export async function mcp(version: string, options: McpCommandOptions, telemetry
   const onRejection = (cause: unknown): void => {
     if (isAbandonedRejection(cause)) return;
     const warn = (message: string): void => output.log(`e2e mcp: [warning] ${processSecrets.redact(message)}`);
-    if (claimRunCodeRejection(cause, warn)) return;
+    // Code a call is running first, then a test a session ran; one that fits neither is left over from a call that ended.
+    if (claimRunCodeRejection(cause)) return;
     if (claimStrayRejection(cause, warn)) return;
+    if (claimLateRunCodeRejection(cause, warn)) return;
     onUncaught(cause);
   };
   process.once('SIGINT', onSignal);

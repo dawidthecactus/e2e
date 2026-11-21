@@ -251,7 +251,7 @@ function main(): void {
   process.on('unhandledRejection', (cause) => {
     if (isAbandonedRejection(cause)) return;
     // Code an attached session ran on a held test made the promise, not the test.
-    if (claimRunCodeRejection(cause, () => undefined)) return;
+    if (claimRunCodeRejection(cause)) return;
     if (worker?.strayRejection(cause) !== true) fatal(cause);
   });
 

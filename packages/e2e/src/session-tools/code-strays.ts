@@ -20,16 +20,21 @@ export const runCodeCalls = {
 };
 
 /**
- * Takes a rejection nobody handled once code has run here: a promise the code
- * made and left fails the calls that are running, and one that settles after
- * its call ended is the operator's to read. False before the first call, so
- * the caller treats it as an uncaught error of its own.
+ * Takes a rejection nobody handled while code runs here: a promise the code
+ * made and left fails the calls that are running. False when none is, so the
+ * caller asks who else may have made it.
  */
-export function claimRunCodeRejection(cause: unknown, warn: (message: string) => void): boolean {
-  if (running.size > 0) {
-    for (const tell of running) tell(cause);
-    return true;
-  }
+export function claimRunCodeRejection(cause: unknown): boolean {
+  for (const tell of running) tell(cause);
+  return running.size > 0;
+}
+
+/**
+ * Takes a rejection that settled after the `run_code` call that most likely
+ * made it ended, which is the operator's to read. False before the first
+ * call, so the caller treats it as an uncaught error of its own.
+ */
+export function claimLateRunCodeRejection(cause: unknown, warn: (message: string) => void): boolean {
   if (!ranBefore) return false;
   warn(`a promise rejected after the run_code call that made it ended: ${classifyError(cause).message}`);
   return true;
