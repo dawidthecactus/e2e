@@ -1,41 +1,38 @@
 /**
- * Where a rejection nobody in the process handled goes while `run_code` runs
- * code: the code is ordinary JavaScript in the server's process, so a promise
- * it makes and leaves rejects on the process, not on the call. Kept apart
- * from `run-code.ts` so a process entry can ask without loading the tool.
+ * Where an error nothing caught goes when `run_code`'s code made it. The code
+ * is ordinary JavaScript in the server's process, so a promise it leaves to
+ * reject, or a timer callback that throws, lands on the process and not on
+ * the call. Each call runs in its own async context, which those errors
+ * carry, so the process's handlers can hand one back to the call it came
+ * from and to no other. Kept apart from `run-code.ts` so a process entry can
+ * ask without loading the tool.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { classifyError } from '@e2e-dev/core/lib/internal/errors';
 
-const running = new Set<(cause: unknown) => void>();
-let ranBefore = false;
+/** One call: where its strays go while it runs. */
+interface Call {
+  tell: ((cause: unknown) => void) | undefined;
+}
 
-export const runCodeCalls = {
-  /** Registers a running call, told of each such rejection until the returned function runs. */
-  begin(tell: (cause: unknown) => void): () => void {
-    running.add(tell);
-    ranBefore = true;
-    return () => void running.delete(tell);
-  },
-};
+const calls = new AsyncLocalStorage<Call>();
 
-/**
- * Takes a rejection nobody handled while code runs here: a promise the code
- * made and left fails the calls that are running. False when none is, so the
- * caller asks who else may have made it.
- */
-export function claimRunCodeRejection(cause: unknown): boolean {
-  for (const tell of running) tell(cause);
-  return running.size > 0;
+/** Runs `body` as one call; `tell` is told each error nothing caught until the returned `end` runs. */
+export function asRunCodeCall<T>(tell: (cause: unknown) => void, body: () => T): { readonly result: T; readonly end: () => void } {
+  const call: Call = { tell };
+  return { result: calls.run(call, body), end: () => void (call.tell = undefined) };
 }
 
 /**
- * Takes a rejection that settled after the `run_code` call that most likely
- * made it ended, which is the operator's to read. False before the first
- * call, so the caller treats it as an uncaught error of its own.
+ * Takes an error nothing in the process caught when a `run_code` call's code
+ * made it: the call fails with it while it runs, and `warn` tells the
+ * operator of one that came after. False for an error from anywhere else.
  */
-export function claimLateRunCodeRejection(cause: unknown, warn: (message: string) => void): boolean {
-  if (!ranBefore) return false;
-  warn(`a promise rejected after the run_code call that made it ended: ${classifyError(cause).message}`);
+export function claimRunCodeStray(cause: unknown, warn: (message: string) => void): boolean {
+  const call = calls.getStore();
+  if (call === undefined) return false;
+  if (call.tell === undefined) warn(`code a run_code call left running failed after the call ended: ${classifyError(cause).message}`);
+  else call.tell(cause);
   return true;
 }

@@ -288,6 +288,25 @@ return { added: after - before, code, items };`,
     expect(still.text).toMatch(/^Returned: "alive"\n/);
   });
 
+  it('stops a cancelled call, even one that swallows every failure, and keeps a list a real array', async () => {
+    const stop = new AbortController();
+    // Left alone this loop runs for the call's whole five minutes, and the session takes one call at a time.
+    const looping = client
+      .callTool(
+        { name: 'call', arguments: { tool: 'run_code', args: { code: "for (;;) { try { await screen.getByRole('button', 'Nowhere').tap(); } catch {} }", timeout: 100 } } },
+        { signal: stop.signal, timeout: 110_000 },
+      )
+      .catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    stop.abort();
+    await looping;
+    const started = Date.now();
+    const next = await runCode(`const items = await screen.getByTestId('item').all();
+return { array: Array.isArray(items), texts: await Promise.all(items.map((item) => item.textContent())) };`);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(next.text, next.text).toMatch(/^Returned: \{"array":true,"texts":\["Item Alpha","Item Beta","Item Gamma"\]\}\n/);
+  });
+
   describe('secrets', () => {
     it('fills a secret as a test does, keeps a secure field unreadable, and keeps the screenshot after the fill', async () => {
       const before = await call('screenshot');

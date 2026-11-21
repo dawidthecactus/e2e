@@ -211,13 +211,13 @@ looks: `run_code` reads the accessibility tree, not pixels.
    text: `status "Saved."` on an unlabelled status is its text, so match it
    with `getByRole('status').filter({ hasText: 'Saved.' })` or `getByText`.
 
-   `run_code` runs statements as a test body writes them, in order, with a
+   `run_code` runs the lines a test body writes, in order, with a
    test's waits and matchers. Await each app call. A failure you do not
-   catch stops the script, and the statements that pass, except reads, join
+   catch stops the code, and the lines that pass, except reads, join
    `test_lines` in the order they ran. When one fails, fix it from its code
    and message and the screen in the result, and check which lines already
    ran before resuming so you avoid repeating an action: the app is where
-   the passing statements left it. A call on the engine's fixture runs there too
+   the passing lines left it. A call on the engine's fixture runs there too
    (`await browser.url()`); `expect` takes a locator or a value, so check
    the URL as a value, `expect(await browser.url()).toContain('/cart')`, and
    write `expect(browser).toHaveURL(...)` in the test. Raise `timeout` for a

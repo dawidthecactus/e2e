@@ -10,7 +10,7 @@
  * target and nothing else is printed, one that matches its twins too is
  * narrowed (to the nodes that render, under a container, or by position, in
  * that order), and otherwise the result says why there is no line. The
- * session keeps the lines in order, with the statements `run_code` passed
+ * session keeps the lines in order, with the lines `run_code` passed
  * among them, and `test_lines` returns them as a draft test body; after a
  * test the session ran, as the lines that continue it. Only the session
  * catalog wraps its grammar this way; the testing agent's model loop never
@@ -182,11 +182,9 @@ export class SessionTestLines {
     this.entries.push({ tool: 'open_session', line: path === undefined ? 'await app.open();' : navigationLine(path, this.options.appBase) });
   }
 
-  /** Records statements `run_code` ran and passed, already in a test's own words, each awaited and ended as a test line. */
-  ran(sources: readonly string[]): void {
-    for (const source of sources) {
-      this.entries.push({ tool: 'run_code', line: `${/^(?:await|const) /.test(source) ? '' : 'await '}${source}${source.endsWith(';') ? '' : ';'}` });
-    }
+  /** Records the lines `run_code` ran and passed, as its recorder wrote them. */
+  ran(lines: readonly string[]): void {
+    for (const line of lines) this.entries.push({ tool: 'run_code', line });
   }
 
   /** The grammar tools, each that has a line answering with it after its lead. */
@@ -209,7 +207,7 @@ export class SessionTestLines {
   /** The recorded lines as a draft test body. */
   draft(): string {
     if (this.entries.length === 0) {
-      return 'No test lines yet. Each action (tap, type, select, check, and the rest) prints the line that repeats it in a test, run_code adds the statements that pass, and this tool returns them in order.';
+      return 'No test lines yet. Each action (tap, type, select, check, and the rest) prints the line that repeats it in a test, run_code adds the lines that pass, and this tool returns them in order.';
     }
     const body = this.entries.map((entry) => ('line' in entry ? entry.line : `// ${entry.tool}: no test line: ${entry.reason}`));
     const imports = ['credentials', 'secrets'].filter((name) => body.some((line) => line.includes(`${name}.`)));

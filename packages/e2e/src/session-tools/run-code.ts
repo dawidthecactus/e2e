@@ -19,16 +19,16 @@ import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { z } from 'zod';
 import type { StepExecutorContext } from '@e2e-dev/core/lib/agent/executor';
 import type { ScreenPresenter } from '@e2e-dev/core/lib/agent/screen-update';
-import { classifyError, codedMessage, ConfigurationError, TestError } from '@e2e-dev/core/lib/internal/errors';
-import { withTimeout } from '@e2e-dev/core/lib/internal/time';
+import { classifyError, codedMessage, TestError } from '@e2e-dev/core/lib/internal/errors';
+import { cancelledError, withAbort, withTimeout } from '@e2e-dev/core/lib/internal/time';
 import { createScreen } from '@e2e-dev/core/lib/locator/screen';
 import { createScreenContext } from '@e2e-dev/core/lib/run/fixtures';
 import type { StandaloneAttempt } from '@e2e-dev/core/lib/run/standalone-attempt';
-import { secretHandle } from '@e2e-dev/core/lib/secrets';
+import { credentialIn, secretIn } from '@e2e-dev/core/lib/secrets';
 import type { Credentials, Secrets } from '@e2e-dev/core/lib/types';
 import { expect } from '../expect/index.ts';
 import { Recorder, type Outcome } from './code-recorder.ts';
-import { runCodeCalls } from './code-strays.ts';
+import { asRunCodeCall } from './code-strays.ts';
 
 /** How long one screen action or matcher may wait unless the call says otherwise, in milliseconds. */
 const RUN_CODE_TIMEOUT_MS = 5_000;
@@ -83,7 +83,7 @@ interface Ended {
 
 /** What `run_code`'s code may call, as the session's opening and the tool's description both spell it. */
 export function runCodeApi(session: RunCodeSession): readonly string[] {
-  return [...RUN_CODE_API, ...session.engineFixtures.filter(bindable).map((name) => fixtureLine(session, name))];
+  return [...RUN_CODE_API, ...fixtureNames(session).map((name) => fixtureLine(session, name))];
 }
 
 /** One engine fixture and the members it has, read off the fixture itself: core names none of them. */
@@ -108,7 +108,7 @@ const RUN_CODE_API: readonly string[] = [
 ];
 
 function scopeNames(session: RunCodeSession): string {
-  return ['screen', 'app', ...session.engineFixtures.filter(bindable), 'expect', 'credentials', 'secrets'].join(', ') + ', and console';
+  return [...BUILT_IN, ...fixtureNames(session)].join(', ') + ', and console';
 }
 
 /** The `run_code` catalog tool. */
@@ -117,7 +117,7 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
     description: [
       `Run JavaScript against the live session: the body of an async function with ${scopeNames(options)} in scope, the objects a test body gets.`,
       "await screen.getByLabel('Email').fill('ada@example.com'); await expect(screen.getByRole('status')).toHaveText('Saved');",
-      'It is ordinary JavaScript in Node, so variables, loops, conditionals, try/catch, functions, and await import() work. Read values, compute on them, and act on what you find in one call:',
+      'It is ordinary JavaScript in Node, so variables, loops, conditionals, try/catch, functions, and await import() of a Node module work. Read values, compute on them, and act on what you find in one call:',
       "const rows = screen.getByRole('listitem'); const prices = (await rows.allTextContents()).map((text) => Number(text.match(/\\$([\\d.]+)/)[1])); return { prices, sorted: prices.every((price, i) => i === 0 || prices[i - 1] <= price) };",
       'return a JSON value to get it back; console.log lines come back too. The result lists each test line the code ran, then what changed on screen.',
       ...runCodeApi(options),
@@ -148,24 +148,24 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   const recorder = new Recorder();
   const logs: string[] = [];
   const stray: unknown[] = [];
-  const timers = new Timers(stray);
-  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder), console: logging(logs), ...timers.scope() };
-  const tell = (cause: unknown): void => void stray.push(cause);
-  const done = runCodeCalls.begin(tell);
+  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder), console: logging(logs) };
   let value: unknown;
   let thrown: { readonly cause: unknown } | undefined;
+  let end = (): void => undefined;
   try {
     const body = compile(args.code, Object.keys(scope));
-    // The cap ends with the timeout even when the code never settles, so the session's budget is its own again.
-    value = await attempt.budget.capped(PROGRAM_TIMEOUT_MS, () =>
-      withTimeout(body(scope), PROGRAM_TIMEOUT_MS, () => new TestError('ACTION_FAILED', `run_code: the code did not finish within ${String(PROGRAM_TIMEOUT_MS)} ms`)),
-    );
+    const call = asRunCodeCall((cause) => void stray.push(cause), () => body(scope));
+    end = call.end;
+    const timeout = (): Error => new TestError('ACTION_FAILED', `run_code: the code did not finish within ${String(PROGRAM_TIMEOUT_MS)} ms`);
+    // Left behind at the timeout or a cancel: the code may never settle, and the recorder's end below stops what it does next.
+    const run = withTimeout(call.result, PROGRAM_TIMEOUT_MS, timeout);
+    // The cap ends with the race, so the session's budget is its own again whatever the code does.
+    value = await attempt.budget.capped(PROGRAM_TIMEOUT_MS, () => (signal === undefined ? run : withAbort(run, signal, cancelledError)));
   } catch (cause) {
     thrown = { cause };
   }
-  timers.clear();
   const { unawaited, lost } = await recorder.end();
-  done();
+  end();
   if (unawaited > 0) logs.push(`${String(unawaited)} call(s) on the app were not awaited when the code ended; they ran, but await each one so a failure stops the code.`);
   // What the code threw first; then a failure it never waited on, which reached nothing in it.
   const failure = thrown ?? [lost, ...stray].flatMap((cause) => (cause === undefined ? [] : [{ cause }]))[0];
@@ -205,32 +205,25 @@ function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: numb
     }),
   );
   // The session's own config, not the registry the process holds: with several sessions open that is the newest one's.
-  const credentials: Credentials = {
-    user: (name) => {
-      const credential = config.credentials.get(name);
-      if (credential === undefined) {
-        throw new ConfigurationError('AUTH_CREDENTIAL_UNAVAILABLE', `credential "${name}" is not configured; add it to config.credentials or E2E_USER_* variables`);
-      }
-      return Object.freeze({ name, username: credential.username, password: secretHandle(credential.password) }) as ReturnType<Credentials['user']>;
-    },
-  };
-  const secrets: Secrets = {
-    get: (name) => {
-      const secret = config.secrets.get(name);
-      if (secret === undefined) throw new ConfigurationError('SECRET_UNAVAILABLE', `secret "${name}" is not configured; add it to config.secrets`);
-      return secretHandle(secret);
-    },
-  };
+  const credentials: Credentials = { user: (name) => credentialIn(config, name) };
+  const secrets: Secrets = { get: (name) => secretIn(config, name) };
   const real: Record<string, unknown> = { screen, app: attempt.fixtures.app, expect, credentials, secrets };
-  for (const name of options.engineFixtures.filter(bindable)) real[name] = Reflect.get(attempt.fixtures, name);
+  for (const name of fixtureNames(options)) real[name] = Reflect.get(attempt.fixtures, name);
   return Object.fromEntries(
     Object.entries(real).map(([name, value]) => [name, (typeof value === 'object' || typeof value === 'function') && value !== null ? recorder.wrap(value, name) : value]),
   );
 }
 
-/** Whether a fixture's name can be a parameter of the code's function: an identifier that is no reserved word. */
+/** The names the code always has, which an engine's fixture of the same name does not replace. */
+const BUILT_IN = ['screen', 'app', 'expect', 'credentials', 'secrets'] as const;
+
+/** The engine fixtures the code gets by name: the ones a name can bind, a built-in's aside. */
+function fixtureNames(session: RunCodeSession): readonly string[] {
+  return session.engineFixtures.filter((name) => bindable(name) && !BUILT_IN.some((own) => own === name) && name !== 'console');
+}
+
+/** Whether a name can be declared in the code's function: the manifest takes any lower-camel identifier, a reserved word such as `default` included. */
 function bindable(name: string): boolean {
-  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return false;
   try {
     // Compiled, never run: the parser is what knows the reserved words.
     return new Script(`async (${name}) => 0`) instanceof Script;
@@ -269,53 +262,6 @@ function syntaxLine(source: string): string {
 function logging(logs: string[]): Pick<Console, 'log' | 'info' | 'debug' | 'warn' | 'error'> {
   const log = (...values: unknown[]): void => void logs.push(values.map((value) => (typeof value === 'string' ? value : show(value))).join(' '));
   return { log, info: log, debug: log, warn: log, error: log };
-}
-
-/**
- * The timers the code gets. A callback runs with nothing awaiting it, so what
- * it throws is kept for the call's end and not left to the process; a timer
- * still set when the code ends is cleared, since the call is over.
- */
-class Timers {
-  private readonly set = new Set<NodeJS.Timeout>();
-
-  constructor(private readonly thrown: unknown[]) {}
-
-  scope(): Record<string, unknown> {
-    const guarded = (callback: (...values: unknown[]) => unknown, values: unknown[]) => (): void => {
-      try {
-        Promise.resolve(callback(...values)).catch((cause: unknown) => this.thrown.push(cause));
-      } catch (cause) {
-        this.thrown.push(cause);
-      }
-    };
-    const clear = (timer: NodeJS.Timeout | undefined): void => {
-      clearTimeout(timer);
-      if (timer !== undefined) this.set.delete(timer);
-    };
-    return {
-      setTimeout: (callback: (...values: unknown[]) => unknown, ms?: number, ...values: unknown[]) => {
-        const timer = setTimeout(() => {
-          this.set.delete(timer);
-          guarded(callback, values)();
-        }, ms);
-        this.set.add(timer);
-        return timer;
-      },
-      setInterval: (callback: (...values: unknown[]) => unknown, ms?: number, ...values: unknown[]) => {
-        const timer = setInterval(guarded(callback, values), ms);
-        this.set.add(timer);
-        return timer;
-      },
-      clearTimeout: clear,
-      clearInterval: clear,
-    };
-  }
-
-  clear(): void {
-    for (const timer of this.set) clearTimeout(timer);
-    this.set.clear();
-  }
 }
 
 /** An error as the result names it: a runner error by its code, another by its name and where in the code it was thrown. */

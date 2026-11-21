@@ -116,12 +116,42 @@ describe('run_code recorder', () => {
     expect(await late.end()).toMatchObject({ unawaited: 1, lost: { code: 'LOCATOR_NOT_FOUND' } });
   });
 
-  it('refuses a call made after the code ended', async () => {
+  it('parks code that calls after the end at its next await, with nothing to catch and spin on', async () => {
     const recorder = new Recorder();
     const screen = recorder.wrap(fakeScreen(), 'screen');
     const button = screen.getByRole('button');
     await recorder.end();
-    expect(() => button.tap()).toThrow(/CANCELLED|was called after the code ended/);
+    let tries = 0;
+    let settled = false;
+    // A loop that swallows each failure and tries again: an error here would spin without ever yielding.
+    void (async () => {
+      for (;;) {
+        tries++;
+        try {
+          await screen.getByRole('row').nth(1).tap();
+          await button.tap();
+        } catch {
+          continue;
+        }
+        settled = true;
+      }
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect({ tries, settled }).toEqual({ tries: 1, settled: false });
     expect(recorder.outcomes).toEqual([]);
+  });
+
+  it('keeps a list a line resolved with a real array, and records what the code does with each item', async () => {
+    const recorder = new Recorder();
+    const row = (index: number) => ({ textContent: () => Promise.resolve(`row ${String(index)}`) });
+    const screen = recorder.wrap({ rows: { all: () => Promise.resolve([row(0), row(1)]) } }, 'screen');
+    const rows = await screen.rows.all();
+    expect(Array.isArray(rows)).toBe(true);
+    expect(await Promise.all(rows.map((item) => item.textContent()))).toEqual(['row 0', 'row 1']);
+    expect(sources(recorder.outcomes)).toEqual(['const all1 = await screen.rows.all();', 'read: await all1[0].textContent();', 'read: await all1[1].textContent();']);
+    // A promise the code got as a member is the code's own, not something to record calls on.
+    const held = recorder.wrap({ ready: Promise.resolve('yes') }, 'held');
+    expect(await held.ready).toBe('yes');
+    expect(recorder.outcomes).toHaveLength(3);
   });
 });
