@@ -315,11 +315,14 @@ Test lines: 2, 1 read not listed.
   until it finishes.
 - Reads, matchers, and values the engine's fixture returns show
   `<secret:name>` where a configured secret value is.
+  A page script run through the fixture can still return a secret in a
+  changed form. See [Security](/reference/security).
 - A secret `fill` passes the checks `type_secret` runs, on the field it lands
   on: a configured secret, an enabled editable field, and a password field
   for a password.
 
-The code runs in a sandbox with no Node globals, modules, files, or network.
+The code runs in a sandbox with no Node globals, modules, files, or network
+of its own. A call on the engine's fixture runs on the host.
 It reaches the app only through test lines, and the server parses each line
 into this grammar before it runs:
 

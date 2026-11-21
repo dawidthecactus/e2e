@@ -58,10 +58,14 @@ larger budget. [How agent steps work](/agent-steps) explains a step in full.
   as the call's result and tries again.
 - The runner never evaluates model text as code, selectors, shell commands,
   or config. The MCP server's [`run_code`](/reference/mcp#run_code) runs a
-  coding agent's JavaScript in a sandbox with no host access. Each call on
-  `screen`, `app`, or `expect` is parsed into a closed grammar. A call on the
-  engine's fixture (`browser`, `device`) reaches any member a test can call,
-  and what it returns has configured secret values redacted.
+  coding agent's JavaScript in a sandbox with no Node globals, modules,
+  files, or network of its own. Each call on `screen`, `app`, or `expect` is
+  parsed into a closed grammar. A call on the engine's fixture (`browser`,
+  `device`) runs on the host and reaches any member a test can call. What it
+  returns has the exact value of each configured secret redacted. A page
+  script can still return a secret in a changed form, such as reversed or
+  encoded, so don't connect an agent you don't trust with the app's
+  secrets.
 
 | Fails with | When |
 | --- | --- |

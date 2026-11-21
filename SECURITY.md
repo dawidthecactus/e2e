@@ -49,12 +49,16 @@ screen fails with `LOCATOR_NOT_FOUND`. Policy refusals, such as a denied
 destination or a forbidden secret fill, fail with `POLICY_DENIED`. Model
 text is never evaluated as code, selectors, shell, or config. The one place
 code from an agent runs is `e2e mcp`'s `run_code`: a coding agent's
-JavaScript runs in a sandbox with no host access. Each call it makes on
-`screen`, `app`, or `expect` is parsed into a closed grammar before the
-runner performs it. A call on the engine's fixture (`browser`, `device`)
-reaches any member a test can call, page scripts included, so the code can
-read what a test can read; what comes back has configured secret values
-redacted, and a value the app derives from one is not caught.
+JavaScript runs in a sandbox that has no Node globals, modules, files, or
+network of its own. Each call it makes on `screen`, `app`, or `expect` is
+parsed into a closed grammar before the runner performs it. A call on the
+engine's fixture (`browser`, `device`) runs on the host with the code's
+arguments and reaches any member a test can call, page scripts included, so
+the code can read what a test can read. What comes back has the exact value
+of each configured secret redacted. A secret the app holds can still reach
+the coding agent in a changed form, such as reversed or encoded by a page
+script: this is an accepted limit of `run_code`, and the one exception to
+the rule below.
 
 Secrets follow from that split. A `Secret` value never reaches model input,
 digests, logs, reports, or artifacts as text. A secret fill is authorized by the runner from
