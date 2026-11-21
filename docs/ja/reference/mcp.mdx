@@ -213,7 +213,7 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 
 | 入力 | 動作 |
 | --- | --- |
-| `code` | 非同期関数の本体です。`screen`、`app`、`expect`、`credentials`、`secrets`、`console`、エンジンのフィクスチャ（`browser` または `device`）をスコープ内で使えます。 |
+| `code` | 非同期関数の本体です。`screen`、`app`、`expect`、`credentials`、`secrets`、`console`、エンジンのフィクスチャ（`browser` または `device`）をスコープ内で使えます。一時停止中のテストにアタッチしたセッションには、エンジンのフィクスチャはありません。 |
 | `timeout` | 省略可能です。`screen` に対する各操作またはマッチャーが待機できる時間を、1〜120000 ミリ秒で指定します。デフォルトは `5000` です。 |
 
 ```txt

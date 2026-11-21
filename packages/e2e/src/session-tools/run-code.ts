@@ -113,6 +113,9 @@ function scopeNames(session: RunCodeSession): string {
 
 /** The `run_code` catalog tool. */
 export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
+  // Counted by the session, so the draft of two calls never declares one name twice.
+  let handles = 0;
+  const nextHandle = (): number => ++handles;
   return {
     description: [
       `Run JavaScript against the live session: the body of an async function with ${scopeNames(options)} in scope, the objects a test body gets.`,
@@ -136,19 +139,22 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
         .optional()
         .describe(`How long each action or matcher on screen may wait, in milliseconds; default ${String(RUN_CODE_TIMEOUT_MS)}`),
     }).strict(),
-    execute: (args: RunCodeArgs, call: ToolExecutionOptions<unknown>) => runCode(options, args, call.abortSignal),
+    execute: (args: RunCodeArgs, call: ToolExecutionOptions<unknown>) => runCode(options, args, call.abortSignal, nextHandle),
     toModelOutput: ({ output }: { readonly output: RunCodeResult }) => ({ type: output.failed ? ('error-text' as const) : ('text' as const), value: output.text }),
   };
 }
 
 /** Runs the code on the session's objects and renders what happened. */
-async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: AbortSignal | undefined): Promise<RunCodeResult> {
+async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: AbortSignal | undefined, nextHandle: () => number): Promise<RunCodeResult> {
   const attempt = options.attempt(signal);
   const redact = attempt.agentRuntime.redact;
-  const recorder = new Recorder();
+  const recorder = new Recorder(redact, nextHandle);
   const logs: string[] = [];
   const stray: unknown[] = [];
   const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder), console: logging(logs) };
+  // Aborted with the call's own timeout; with the caller's cancel it is what ends the operation the code is in the middle of.
+  const timeout = new AbortController();
+  const cut = signal === undefined ? timeout.signal : AbortSignal.any([signal, timeout.signal]);
   let value: unknown;
   let thrown: { readonly cause: unknown } | undefined;
   let end = (): void => undefined;
@@ -156,15 +162,20 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
     const body = compile(args.code, Object.keys(scope));
     const call = asRunCodeCall((cause) => void stray.push(cause), () => body(scope));
     end = call.end;
-    const timeout = (): Error => new TestError('ACTION_FAILED', `run_code: the code did not finish within ${String(PROGRAM_TIMEOUT_MS)} ms`);
-    // Left behind at the timeout or a cancel: the code may never settle, and the recorder's end below stops what it does next.
-    const run = withTimeout(call.result, PROGRAM_TIMEOUT_MS, timeout);
+    // The code is left behind at a cancel or the timeout: it may never settle.
+    const run = (): Promise<unknown> => (signal === undefined ? call.result : withAbort(call.result, signal, cancelledError));
+    const timedOut = (): Error => {
+      timeout.abort();
+      return new TestError('ACTION_FAILED', `run_code: the code did not finish within ${String(PROGRAM_TIMEOUT_MS)} ms`);
+    };
     // The cap ends with the race, so the session's budget is its own again whatever the code does.
-    value = await attempt.budget.capped(PROGRAM_TIMEOUT_MS, () => (signal === undefined ? run : withAbort(run, signal, cancelledError)));
+    value = await attempt.budget.capped(PROGRAM_TIMEOUT_MS, () => withTimeout(run(), PROGRAM_TIMEOUT_MS, timedOut), cut);
   } catch (cause) {
     thrown = { cause };
   }
-  const { unawaited, lost } = await recorder.end();
+  // A promise the code left rejected in its last turn is reported once that turn is over.
+  await new Promise((resolve) => setImmediate(resolve));
+  const { unawaited, lost } = await recorder.end(cut.aborted);
   end();
   if (unawaited > 0) logs.push(`${String(unawaited)} call(s) on the app were not awaited when the code ended; they ran, but await each one so a failure stops the code.`);
   // What the code threw first; then a failure it never waited on, which reached nothing in it.
@@ -226,7 +237,7 @@ function fixtureNames(session: RunCodeSession): readonly string[] {
 function bindable(name: string): boolean {
   try {
     // Compiled, never run: the parser is what knows the reserved words.
-    return new Script(`async (${name}) => 0`) instanceof Script;
+    return new Script(`'use strict'; async (${name}) => 0`) instanceof Script;
   } catch {
     return false;
   }

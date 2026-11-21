@@ -12,6 +12,11 @@ import { isPlainObject } from '@e2e-dev/core/lib/internal/options';
 /** What became of one line: the value it resolved with, or the error it failed with. */
 export type Outcome = { readonly source: string; readonly read: boolean; readonly value: unknown } | { readonly source: string; readonly error: E2EError };
 
+/** What ended the code's turn: it settled on its own, or a timeout or a cancel cut it off. */
+type Turn = 'running' | 'settled' | 'cut';
+
+/** How long a call that was cut off waits for the operation it was in the middle of, which was cancelled with it. */
+const CUT_GRACE_MS = 2_000;
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const MAX_DEPTH = 50;
 
@@ -36,10 +41,10 @@ class Line<T> extends Promise<T> {
 }
 
 /**
- * What a call answers once the code's turn is over: every member and call
- * gives it back, and awaiting it never ends. Code still running, such as a
- * loop that catches each failure and tries again, stops at its next await
- * with nothing to catch, where an error it swallowed would spin the process.
+ * What a call answers once the code was cut off: every member and call gives
+ * it back, and awaiting it never ends. Code still running, such as a loop
+ * that catches each failure and tries again, stops at its next await with
+ * nothing to catch, where an error it swallowed would spin the process.
  */
 const PARKED: unknown = new Proxy(() => undefined, {
   get: (_, key) => (key === 'then' ? () => undefined : typeof key === 'symbol' ? undefined : PARKED),
@@ -55,21 +60,37 @@ interface Sent {
 }
 
 export class Recorder {
-  readonly outcomes: Outcome[] = [];
+  /** One entry per line, in the order the code made them; a line still running holds its place. */
+  private readonly slots: (Outcome | undefined)[] = [];
   private readonly reals = new WeakMap<object, object>();
+  private readonly proxies = new WeakMap<object, object>();
   /** The test-line text of an object a get or a call gave the code. */
   private readonly sources = new WeakMap<object, string>();
   private readonly sent: Sent[] = [];
   private readonly pending = new Set<Sent>();
-  private handles = 0;
-  private over = false;
+  private turn: Turn = 'running';
+
+  constructor(
+    /** The secret ledger, for a string before it is escaped into a line, where the ledger would no longer know it. */
+    private readonly redact: (text: string) => string,
+    /** The next number for a name, counted by the session so two calls never declare the same one. */
+    private readonly nextHandle: () => number,
+  ) {}
+
+  /** What became of each line that settled, in the order the code made them. */
+  get outcomes(): readonly Outcome[] {
+    return this.slots.filter((slot) => slot !== undefined);
+  }
 
   /** `real` as the code holds it: every call on it runs on `real` and is recorded under `text`. */
   wrap<T extends object>(real: T, text: string): T {
+    const known = this.proxies.get(real);
+    if (known !== undefined) return known as T;
     // Not `real` itself: a frozen fixture's members could not be answered with their wrappers.
     const proxy = new Proxy(typeof real === 'function' ? () => undefined : {}, {
       get: (_, key) => (typeof key === 'symbol' ? Reflect.get(real, key, real) : this.member(real, key, /^\d+$/.test(key) ? `${text}[${key}]` : `${text}.${key}`)),
       apply: (_, __, args: unknown[]) => this.call(real, undefined, text, args),
+      set: (_, key, value) => Reflect.set(real, key, value, real),
       has: (_, key) => Reflect.has(real, key),
       ownKeys: () => Reflect.ownKeys(real),
       getOwnPropertyDescriptor: (_, key) => {
@@ -79,20 +100,33 @@ export class Recorder {
       getPrototypeOf: () => Reflect.getPrototypeOf(real),
     });
     this.reals.set(proxy, real);
+    this.proxies.set(real, proxy);
     this.sources.set(proxy, text);
     return proxy as T;
   }
 
   /**
-   * Ends the recording: a call the code makes from here on never runs, and
-   * the lines still running are waited for, so the app is where they left it.
-   * Answers the first failure nothing in the code was there to catch.
+   * Ends the code's turn and waits for the lines still running, so the app is
+   * where they left it. Code that was `cut` off never runs another call, and
+   * an operation that does not end with the cancel is left behind after a
+   * moment, so the session is not held for it. Code
+   * that settled may have left a handler behind, such as a route's, and what
+   * that calls later runs as it does in a test, unrecorded. Answers the first
+   * failure nothing in the code was there to catch.
    */
-  async end(): Promise<{ readonly unawaited: number; readonly lost: unknown }> {
-    this.over = true;
+  async end(cut: boolean): Promise<{ readonly unawaited: number; readonly lost: unknown }> {
+    this.turn = cut ? 'cut' : 'settled';
     const unawaited = this.pending.size;
     for (const sent of this.pending) sent.late = true;
-    while (this.pending.size > 0) await Promise.all([...this.pending].map((sent) => sent.settled));
+    const settled = (async (): Promise<void> => {
+      while (this.pending.size > 0) await Promise.all([...this.pending].map((sent) => sent.settled));
+    })();
+    if (!cut) await settled;
+    else {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([settled, new Promise((resolve) => void (timer = setTimeout(resolve, CUT_GRACE_MS)))]);
+      clearTimeout(timer);
+    }
     const lost = this.sent.find((sent) => sent.failed !== undefined && (sent.late || !sent.line.seen));
     return { unawaited, lost: lost?.failed?.cause };
   }
@@ -119,28 +153,33 @@ export class Recorder {
     }
     if (!isData(value, 0)) return this.wrap(value, text);
     this.sources.set(value, text);
-    if (depth < MAX_DEPTH && !Array.isArray(value)) for (const [key, item] of Object.entries(value)) this.given(item, `${text}.${key}`, depth + 1);
+    if (depth < MAX_DEPTH && isPlainObject(value)) for (const [key, item] of Object.entries(value)) this.given(item, `${text}.${key}`, depth + 1);
     return value;
   }
 
   private call(method: object, receiver: object | undefined, text: string, args: unknown[]): unknown {
-    if (this.over) return PARKED;
+    if (this.turn === 'cut') return PARKED;
     const called = `${text}(${args.map((arg) => this.spell(arg, 0)).join(', ')})`;
+    const recording = this.turn === 'running';
     let returned: unknown;
     try {
       returned = Reflect.apply(method as (...values: unknown[]) => unknown, receiver, args.map((arg) => this.real(arg, 0)));
     } catch (cause) {
-      this.outcomes.push({ source: `${called};`, error: classifyError(cause) });
+      if (recording) this.slots.push({ source: `${called};`, error: classifyError(cause) });
       throw cause;
     }
-    return isThenable(returned) ? this.line(called, returned, text, args) : this.given(returned, called);
+    if (!isThenable(returned)) return this.given(returned, called);
+    return recording ? this.line(called, returned, text, args) : Promise.resolve(returned).then((value) => this.given(value, called));
   }
 
   private line(called: string, returned: PromiseLike<unknown>, text: string, args: readonly unknown[]): Promise<unknown> {
     const source = `await ${called};`;
+    // A line made while another still runs was not written after it: a test that awaits them in turn would wait on the first alone.
+    const note = this.pending.size > 0 ? ' // ran while the line above was still running; a test needs them in one Promise.all' : '';
+    const slot = this.slots.push(undefined) - 1;
     const line = new Line<unknown>((resolve, reject) => {
       returned.then((value) => {
-        resolve(this.resolved(value, source, called, text, args));
+        resolve(this.resolved(value, slot, source, note, text, args));
       }, reject);
     });
     const sent: Sent = { line, failed: undefined, late: false, settled: Promise.resolve() };
@@ -150,7 +189,7 @@ export class Recorder {
       () => undefined,
       (cause: unknown) => {
         sent.failed = { cause };
-        this.outcomes.push({ source, error: classifyError(cause) });
+        this.slots[slot] = { source, error: classifyError(cause) };
       },
     ).finally(() => this.pending.delete(sent));
     this.sent.push(sent);
@@ -164,15 +203,16 @@ export class Recorder {
    * chain on a promise: the line that made it declares the name and later
    * lines call it by that.
    */
-  private resolved(value: unknown, source: string, called: string, text: string, args: readonly unknown[]): unknown {
+  private resolved(value: unknown, slot: number, source: string, note: string, text: string, args: readonly unknown[]): unknown {
     if (isData(value, 0)) {
       // A call that gives a value back only read, unless it ran a function of the code's, which may have changed the app.
-      this.outcomes.push({ source, read: value !== undefined && !args.some((arg) => holdsFunction(arg, 0)), value });
+      const read = value !== undefined && !args.some((arg) => holdsFunction(arg, 0));
+      this.slots[slot] = { source: read ? source : `${source}${note}`, read, value };
       return value;
     }
     const member = text.slice(text.lastIndexOf('.') + 1);
-    const name = `${IDENTIFIER.test(member) ? member : 'object'}${String(++this.handles)}`;
-    this.outcomes.push({ source: `const ${name} = await ${called};`, read: false, value: undefined });
+    const name = `${IDENTIFIER.test(member) ? member : 'object'}${String(this.nextHandle())}`;
+    this.slots[slot] = { source: `const ${name} = ${source}${note}`, read: false, value: undefined };
     return this.given(value, name);
   }
 
@@ -193,7 +233,7 @@ export class Recorder {
 
   /** An argument as a test would write it. */
   private spell(value: unknown, depth: number): string {
-    if (typeof value === 'string') return `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r')}'`;
+    if (typeof value === 'string') return `'${this.redact(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r')}'`;
     if (typeof value === 'bigint') return `${String(value)}n`;
     if (typeof value !== 'object' && typeof value !== 'function') return String(value);
     if (value === null) return 'null';
@@ -219,6 +259,8 @@ function isData(value: unknown, depth: number): boolean {
   if (value === null || value === undefined) return true;
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return true;
   if (typeof value !== 'object' || depth > MAX_DEPTH) return false;
+  // Values with internal slots, which only their own object can answer for: wrapped, a buffer's bytes or a map's entries are out of reach.
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof Map || value instanceof Set || value instanceof Date || value instanceof RegExp || value instanceof URL) return true;
   if (Array.isArray(value)) return value.every((item) => isData(item, depth + 1));
   if (!isPlainObject(value)) return false;
   return Object.values(value).every((item) => isData(item, depth + 1));

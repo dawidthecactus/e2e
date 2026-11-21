@@ -212,7 +212,7 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 
 | 输入 | 作用 |
 | --- | --- |
-| `code` | 异步函数的函数体。作用域内可使用 `screen`、`app`、`expect`、`credentials`、`secrets`、`console` 以及引擎的 fixture（`browser` 或 `device`）。 |
+| `code` | 异步函数的函数体。作用域内可使用 `screen`、`app`、`expect`、`credentials`、`secrets`、`console` 以及引擎的 fixture（`browser` 或 `device`）。附加到暂停测试的会话没有引擎的 fixture。 |
 | `timeout` | 可选。对 `screen` 的每个操作或匹配器可等待的时间，单位为毫秒，范围为 1 到 120000。默认为 `5000`。 |
 
 ```txt

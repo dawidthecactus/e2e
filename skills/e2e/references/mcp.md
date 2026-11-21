@@ -218,10 +218,8 @@ looks: `run_code` reads the accessibility tree, not pixels.
    and message and the screen in the result, and check which lines already
    ran before resuming so you avoid repeating an action: the app is where
    the passing lines left it. A call on the engine's fixture runs there too
-   (`await browser.url()`); `expect` takes a locator or a value, so check
-   the URL as a value, `expect(await browser.url()).toContain('/cart')`, and
-   write `expect(browser).toHaveURL(...)` in the test. Raise `timeout` for a
-   slow screen.
+   (`await browser.url()`), and `expect` takes what a test's does:
+   `await expect(browser).toHaveURL(...)`.
 
    When the walk ends, the test is written, every line you copied from a
    `Test line:` or ran with `run_code` has run once on the live app, and the

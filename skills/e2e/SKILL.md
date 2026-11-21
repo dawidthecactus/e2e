@@ -110,7 +110,7 @@ describe('billing', () => {
    in the session. An `act` goal goes in before you walk its path, and the
    path's actions stay out of the test. A `screen` line is the `Test line:`
    its action printed, copied as is. When the outcome shows, run its
-   `expect` with `run_code` and add it once it passes; a passing statement
+   `expect` with `run_code` and add it once it passes; a passing line
    also joins `test_lines`; checks go in the test's assert block at the end.
    `run_code` runs JavaScript on the test API, so use it for most of a
    session's work, a loop or a read and a check in one call, over many

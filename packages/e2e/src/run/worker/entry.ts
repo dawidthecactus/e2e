@@ -242,8 +242,8 @@ function main(): void {
   // Interrupts arrive over IPC; terminal signals target the runner process.
   process.on('SIGINT', () => undefined);
   process.on('SIGTERM', () => undefined);
-  // Code an attached session ran on a held test is not the test: what it throws outside its call stays out of the attempt.
-  const fromRunCode = (cause: unknown): boolean => claimRunCodeStray(cause, () => undefined);
+  // Code an attached session runs on a held test is not the test: what it throws outside its call fails that call, not the attempt.
+  const fromRunCode = (cause: unknown): boolean => claimRunCodeStray(cause);
   process.on('uncaughtException', (cause) => {
     if (!fromRunCode(cause)) fatal(cause);
   });

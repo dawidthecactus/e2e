@@ -277,9 +277,12 @@ return { added: after - before, code, items };`,
     const caught = await runCode("const tap = screen.getByRole('button', 'Nowhere').tap();\ntry { await tap; } catch { return 'caught'; }", 250);
     expect(caught.text, caught.text).toMatch(/^Returned: "caught"\n/);
 
-    const left = await runCode("Promise.reject(new Error('left behind'));\nawait new Promise((resolve) => setTimeout(resolve, 60));\nreturn 'after';");
-    expect(left.isError).toBe(true);
-    expect(left.text).toMatch(/^Failed: Error: left behind \(line 1:\d+\)\n/);
+    // With time to spare, and in the code's very last turn.
+    for (const rest of ["await new Promise((resolve) => setTimeout(resolve, 60));\n", '']) {
+      const left = await runCode(`Promise.reject(new Error('left behind'));\n${rest}return 'after';`);
+      expect(left.isError, rest).toBe(true);
+      expect(left.text).toMatch(/^Failed: Error: left behind \(line 1:\d+\)\n/);
+    }
     const timer = await runCode("setTimeout(() => { expect(1).toBe(2); }, 10);\nawait new Promise((resolve) => setTimeout(resolve, 60));\nreturn 'after';");
     expect(timer.isError).toBe(true);
     expect(timer.text).toMatch(/^Failed: ASSERTION_FAILED: expected 1 to be 2/);
@@ -288,23 +291,41 @@ return { added: after - before, code, items };`,
     expect(still.text).toMatch(/^Returned: "alive"\n/);
   });
 
-  it('stops a cancelled call, even one that swallows every failure, and keeps a list a real array', async () => {
-    const stop = new AbortController();
-    // Left alone this loop runs for the call's whole five minutes, and the session takes one call at a time.
-    const looping = client
-      .callTool(
-        { name: 'call', arguments: { tool: 'run_code', args: { code: "for (;;) { try { await screen.getByRole('button', 'Nowhere').tap(); } catch {} }", timeout: 100 } } },
-        { signal: stop.signal, timeout: 110_000 },
-      )
-      .catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    stop.abort();
-    await looping;
-    const started = Date.now();
-    const next = await runCode(`const items = await screen.getByTestId('item').all();
+  it('stops a cancelled call, whether it swallows every failure or waits on the app, and keeps a list a real array', async () => {
+    // Left alone each of these holds the call for minutes, and the session takes one call at a time.
+    for (const code of ["for (;;) { try { await screen.getByRole('button', 'Nowhere').tap(); } catch {} }", 'await browser.evaluate(() => new Promise(() => {}));']) {
+      const stop = new AbortController();
+      const cancelled = client
+        .callTool({ name: 'call', arguments: { tool: 'run_code', args: { code, timeout: 100 } } }, { signal: stop.signal, timeout: 110_000 })
+        .catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      stop.abort();
+      await cancelled;
+      const started = Date.now();
+      const next = await runCode("return 'next';");
+      expect(Date.now() - started, code).toBeLessThan(10_000);
+      expect(next.text, code).toMatch(/^Returned: "next"\n/);
+    }
+    const listed = await runCode(`const items = await screen.getByTestId('item').all();
 return { array: Array.isArray(items), texts: await Promise.all(items.map((item) => item.textContent())) };`);
+    expect(listed.text, listed.text).toMatch(/^Returned: \{"array":true,"texts":\["Item Alpha","Item Beta","Item Gamma"\]\}\n/);
+  });
+
+  it('runs a handler one call left behind when a later call fires it', async () => {
+    // The handler closes over the first call's browser, and every request of the second waits on it.
+    const routed = await runCode("await browser.route('**/*', async (route) => { await browser.title(); return route.continue(); });");
+    expect(routed.isError, routed.text).toBe(false);
+    const started = Date.now();
+    const reloaded = await runCode("await browser.reload();\nawait browser.unrouteAll();\nreturn 'reloaded';");
+    expect(reloaded.text, reloaded.text).toMatch(/^Returned: "reloaded"\n/);
     expect(Date.now() - started).toBeLessThan(10_000);
-    expect(next.text, next.text).toMatch(/^Returned: \{"array":true,"texts":\["Item Alpha","Item Beta","Item Gamma"\]\}\n/);
+  });
+
+  it('numbers the names it declares by the session, so two calls draft one runnable body', async () => {
+    for (let round = 0; round < 2; round++) expect((await runCode('const tab = await browser.newTab();\nawait tab.close();')).isError).toBe(false);
+    const declared = [...(await call('test_lines')).text.matchAll(/^const (\w+) = await browser\.newTab\(\);$/gm)].map((match) => match[1]);
+    expect(new Set(declared).size).toBe(declared.length);
+    expect(declared.length).toBeGreaterThanOrEqual(2);
   });
 
   describe('secrets', () => {
