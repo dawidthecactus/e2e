@@ -48,21 +48,14 @@ and can try again. A node id that cannot be resolved on the current
 screen fails with `LOCATOR_NOT_FOUND`. Policy refusals, such as a denied
 destination or a forbidden secret fill, fail with `POLICY_DENIED`. Model
 text is never evaluated as code, selectors, shell, or config. The one place
-code from an agent runs is `e2e mcp`'s `run_code`: a coding agent's
-JavaScript runs in a sandbox that has no Node globals, modules, files, or
-network of its own. Each call it makes on `screen`, `app`, or `expect` is
-parsed into a closed grammar before the runner performs it. A call on the
-engine's fixture (`browser`, `device`) runs on the host with the code's
-arguments and reaches any member a test can call, page scripts included, so
-the code can read what a test can read. A member known to reach a host file
-by a path the code names, or the driver's raw client, is refused
-(`setInputFiles`, `screenshot`, `addInitScript` and `route` with a `path`,
-`installApp` with a path, `unstable_*`); the engines do not confine paths
-themselves yet, so a member outside that list is not. What comes back has the exact value
-of each configured secret redacted. A secret the app holds can still reach
-the coding agent in a changed form, such as reversed or encoded by a page
-script: this is an accepted limit of `run_code`, and the one exception to
-the rule below.
+code from an agent runs is `e2e mcp`'s `run_code`, and that code is
+code-trust: a coding agent's JavaScript runs in the server's Node process,
+unconfined, on the objects a test body gets. A coding agent that can write a
+test file and run it has that authority already, so `run_code` adds none.
+What it returns has the exact value of each configured secret redacted. The
+code itself can read a secret the app shows: this is the one exception to
+the rule below, and a reason not to connect an agent you don't trust with
+the project.
 
 Secrets follow from that split. A `Secret` value never reaches model input,
 digests, logs, reports, or artifacts as text. A secret fill is authorized by the runner from

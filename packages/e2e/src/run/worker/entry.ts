@@ -31,6 +31,7 @@ import type {
 import { inHeldTestToolCall } from './held-test-tool-scope.ts';
 import { TargetWorker, type ResolvedUnitPairs, type TargetWorkerDeps } from './session.ts';
 import { isAbandonedRejection } from '@e2e-dev/core/lib/internal/abandoned';
+import { claimRunCodeRejection } from '../../session-tools/code-strays.ts';
 
 /**
  * Outbound messages in flight. `process.send` is asynchronous and a
@@ -249,6 +250,8 @@ function main(): void {
   // has finished is it the worker's.
   process.on('unhandledRejection', (cause) => {
     if (isAbandonedRejection(cause)) return;
+    // Code an attached session ran on a held test made the promise, not the test.
+    if (claimRunCodeRejection(cause, () => undefined)) return;
     if (worker?.strayRejection(cause) !== true) fatal(cause);
   });
 

@@ -684,18 +684,11 @@ ${CONFIG.replace('  video: true,', `  video: true,
     }
   });
 
-  it('fills a password through attached run_code only in a password field and keeps its value out of the output', async () => {
+  it('fills a password through attached run_code and keeps its value out of the output', async () => {
     const dir = project('await screen.pause();');
     const held = await pause(dir, '--trace', 'on');
     const { client, log } = await mcp(dir);
     const opened = await openSession(client, { attach: held.id });
-    const denied = await invoke(client, 'call', {
-      tool: 'run_code',
-      args: { code: 'await screen.getByRole("textbox", "Email").fill(credentials.user("buyer").password);' },
-    });
-    expect(denied.isError).toBe(true);
-    expect(denied.text).toContain('POLICY_DENIED');
-
     const allowed = await invoke(client, 'call', {
       tool: 'run_code',
       args: { code: 'await screen.getByRole("textbox", "Password").fill(credentials.user("buyer").password);' },
@@ -716,7 +709,6 @@ ${CONFIG.replace('  video: true,', `  video: true,
 
     const output = [
       opened.text,
-      denied.text,
       allowed.text,
       observed.text,
       lines.text,

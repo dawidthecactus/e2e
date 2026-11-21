@@ -738,17 +738,13 @@ trees, on both platforms, without a device.
     `LOCATOR_NOT_FOUND`, an action failure the model reads and re-aims from.
     `POLICY_DENIED` is for denied destinations, forbidden fills, and withheld
     pixels. Model text is never evaluated as code, selectors, shell, or
-    config; `e2e mcp`'s `run_code` runs a coding agent's JavaScript only in a
-    sandbox with no host access, and parses each call it makes on `screen`,
-    `app`, or `expect` into the closed grammar of `code-parse.ts`; a call on
-    an engine fixture reaches any member by name (`code-fixtures.ts`), never
-    what every object inherits or a member listed there as reaching a host
-    file by path, runs no function of the code's on the host,
-    and returns through the secret ledger. That ledger replaces a secret's
-    exact value only. An accepted exception to the first invariant: through
-    an engine fixture, such as a page script in `browser.evaluate`, the code
-    of an MCP session can read a configured secret the app holds in a changed
-    form (reversed, encoded), and that reaches the coding agent. App content, ledger text, and pixels are quoted as untrusted
+    config. The one exception is `e2e mcp`'s `run_code`, which runs a coding
+    agent's JavaScript in the server's process with a test file's authority
+    (`session-tools/run-code.ts`): that agent can already write a test and
+    run it. Its result passes the secret ledger, which replaces a secret's
+    exact value only, so the code of an MCP session can read a configured
+    secret the app shows: an accepted exception to the first invariant.
+    App content, ledger text, and pixels are quoted as untrusted
     evidence with no policy authority.
   - Every navigation a test or the agent asks for (`app.open`,
     `browser.goto`, the `navigate` verb) goes through one rule,

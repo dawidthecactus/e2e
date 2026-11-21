@@ -267,7 +267,7 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 | Input | Does |
 | --- | --- |
 | `code` | The body of an async function. `screen`, `app`, `expect`, `credentials`, `secrets`, `console`, and the engine's fixture (`browser` or `device`) are in scope. |
-| `timeout` | Optional. How long each line may wait, in ms, 1 through 120000. Default `5000`. |
+| `timeout` | Optional. How long each action or matcher on `screen` may wait, in ms, 1 through 120000. Default `5000`. |
 
 ```txt
 Returned: [12.5,18,24]
@@ -275,95 +275,44 @@ Test lines: 2, 1 read not listed.
 1. await expect(screen.getByRole('listitem')).toHaveCount(12);
 ```
 
-- Variables, loops, conditionals, `try`/`catch`, functions, and the
-  JavaScript built-ins work. `return` a JSON value to get it back.
-  `console.log` lines come back too.
-- A call on `screen`, `app`, or `expect(locator)` that ends in an action, a
-  read, or a matcher runs as one test line, with a test's waits,
-  exactly-one rule, and matchers. `await` each one.
-- Any member of the engine's fixture can be called, such as
-  `browser.evaluate(() => document.title)` or `browser.goto(url)`. A function
-  passed to one runs only where the fixture sends its source, as `evaluate`
-  does. A handler the runner would call, such as a `route` handler, is not
-  supported. A member that reaches a host file by a path the code names, or
-  the driver's raw client, is refused: `setInputFiles`, `screenshot`,
-  `addInitScript` and `route` with a `path`, `installApp` with a path, and
-  `unstable_*`. Use [`upload`](#actions) and
-  [`screenshot`](#screenshot), which check the path.
-- A line that fails throws an `Error` whose `code` is the code a test would
-  get. Uncaught, it stops the code and the result is an error result. The
-  app stays where the passing lines left it.
-- `await` each line. Lines made without waiting for one that then fails
-  don't run, and a failure nothing awaited fails the call. So does an error
-  a `setTimeout` callback throws.
-- A script that is only test lines is checked whole first: when the
-  secret policy refuses one of its lines, no line runs. In any other code,
-  only a syntax error is found before anything runs, and a refused line
-  fails when the code reaches it, after the lines before it ran.
+- The code is ordinary JavaScript in the server's Node process, and the
+  objects in scope are the ones a test body gets. A call waits, matches,
+  and fails as it does in a test, and a function you pass, such as a
+  `browser.route` handler, is called like a test's.
+- `return` a JSON value to get it back. `console.log` lines come back too.
+- A line that fails throws the error a test gets, with its `code`. Uncaught,
+  it stops the code and the result is an error result. The app stays where
+  the passing lines left it.
+- `await` each line. A failure nothing awaited fails the call. So does a
+  promise the code left to reject, and an error a `setTimeout` callback
+  throws.
 - The result lists the lines that ran. A read shows its value there when the
   code returns nothing and logs nothing. Otherwise `return` the value.
 - The lines that pass, except reads, join the [`test_lines`](#test_lines)
-  draft in the order they ran. A call on the engine's fixture that returns a
-  value counts as a read, unless it passes a function, such as a page script
-  for `evaluate`, which may change the page. An object a call
-  awaited for, such as a new tab, gets a `const` line that names it.
-- The code is read as TypeScript before it runs. A comparison that reads as
-  type arguments, such as `[x < y, x > (y)]`, fails. Put it in parentheses.
-- `expect(value)` checks a value the code holds, with `toBe`, `toEqual`,
-  `toContain`, `toMatch`, `toHaveLength`, the comparisons, and `.not`.
-- Each line waits at most `timeout`, its own `timeout` option included.
-  The config's [`actionTimeout`](/reference/config#actiontimeout) and
+  draft in the order they ran. A call that resolves with a value counts as a
+  read, unless it passes a function, such as a page script for `evaluate`,
+  which may change the page. An object a call resolves with, such as a new
+  tab, gets a `const` line that names it.
+- Each action or matcher on `screen` waits at most `timeout`. The config's
+  [`actionTimeout`](/reference/config#actiontimeout) and
   [`assertionTimeout`](/reference/config#assertiontimeout) apply when
-  shorter. The cap also covers `app.open`, `app.restart`, and
-  `app.clearState`, so raise it for a slow first load or a device relaunch.
-- `setTimeout` waits up to 10 seconds a call. `clearTimeout` cancels one.
-- `timeout` doesn't stop a regular expression mid-match. One that
-  backtracks, such as `/^(\w+\s?)*$/` on a long line, blocks the server
-  until it finishes.
-- Reads, matchers, and values the engine's fixture returns show
-  `<secret:name>` where a configured secret value is.
-  A page script run through the fixture can still return a secret in a
-  changed form. See [Security](/reference/security).
-- A secret `fill` passes the checks `type_secret` runs, on the field it lands
-  on: a configured secret, an enabled editable field, and a password field
-  for a password.
+  shorter. `app` and the engine's fixture wait as they do in a test.
+- The whole call may run 5 minutes. Code that never yields, such as
+  `while (true) {}`, blocks the server.
+- The result shows `<secret:name>` where a configured secret value is.
 
-The code runs in a sandbox with no Node globals, modules, files, or network
-of its own. A call on the engine's fixture runs on the host.
-A call on `screen`, `app`, or `expect(locator)` reaches the app as a test
-line, and the server parses each line into this grammar before it runs:
-
-| Part | Accepted |
-| --- | --- |
-| Line | A chain on `screen` or `app` that ends in an action or a read, or `expect(locator)` with an optional `.not` and one matcher |
-| Locator | `screen.getByRole`, `getByLabel`, `getByText`, `getByPlaceholder`, `getByTestId`, or `getByDisplayValue`, narrowed with `filter`, `or`, `first`, `last`, `nth`, and more `getBy*` |
-| Argument | A string, number, boolean, `null`, regular expression, array, object, locator, or `credentials.user(name).username` |
-| Secret | `credentials.user(name).password` or `secrets.get(name)`, as `fill`'s value only |
-
-Left out: `page`, `expect(screen)`, `toHaveScreenshot`, `app.screenshot`,
-`screen.debug`, `screen.pause`, `all`, and `setInputFiles`.
-
-| Limit | Value |
-| --- | --- |
-| The code's own running time, waits on the app aside | 5 seconds |
-| The whole call, up to the observation that closes it | 5 minutes |
-| Memory | 64 MB |
-| Lines and `setTimeout` calls | 1000 |
-| Return value | 1 MB |
+The code is not confined. It has the authority of a test file: it can
+import modules, read files, and read the values the app shows, a secret
+included. See [Security](/reference/security).
 
 | Throws | When |
 | --- | --- |
-| `INVALID_ARGUMENT` | Code that doesn't parse. The message gives the line and column, and nothing runs. |
-| `INVALID_ARGUMENT` | A line outside the grammar, such as a member it lacks or a function as an argument. The line doesn't run. |
-| `INVALID_ARGUMENT` | A matcher that expects `<secret:name>`, since a test compares the real value. The line doesn't run. |
-| `ASSERTION_FAILED` | An `expect(value)` that doesn't hold. |
-| `POLICY_DENIED` | A secret `fill` into a field that fails the `type_secret` checks. Nothing is typed. |
+| `INVALID_ARGUMENT` | Code that doesn't parse. The message gives the line, and nothing runs. |
+| `ASSERTION_FAILED` | An `expect` that doesn't hold. |
 | `POLICY_DENIED` | A read of a secure field, such as a password input. |
-| `POLICY_DENIED` | When the config declares a secret or credential, a locator found by part of a text: a regular expression, an `exact` other than `true`, or `hasText`. Find it by its exact text, or read the texts with `allTextContents()` and pick with `nth`. The line doesn't run. |
-| `POLICY_DENIED` | A call on the engine's fixture that reaches a host file by path, or the driver's raw client. Nothing is read or called. |
 
-A limit the code crosses ends the call with an error result that carries
-no error code.
+An error that is not the runner's, such as a `TypeError`, comes back by its
+name with the line it was thrown on.
 
 #### `test_lines`
 
@@ -657,8 +606,8 @@ exits.
 Sessions enforce what tests enforce:
 
 - Node ids are valid only against the newest observation.
-- A secret fills only through `type_secret` or a [`run_code`](#run_code)
-  `fill`, under the same checks.
+- The single actions fill a secret only through `type_secret`.
+  [`run_code`](#run_code) fills one as a test does.
 - Once the config has loaded, its secret values are redacted from every text
   a tool returns, a node `locate` found, an action's result, an
   `open_session` or `close_session` failure, a cleanup line, and the server's

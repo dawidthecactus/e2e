@@ -213,7 +213,7 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 | 输入 | 作用 |
 | --- | --- |
 | `code` | 异步函数的函数体。作用域内可使用 `screen`、`app`、`expect`、`credentials`、`secrets`、`console` 以及引擎的 fixture（`browser` 或 `device`）。 |
-| `timeout` | 可选。每行代码可等待的时间，单位为毫秒，范围为 1 到 120000。默认为 `5000`。 |
+| `timeout` | 可选。对 `screen` 的每个操作或匹配器可等待的时间，单位为毫秒，范围为 1 到 120000。默认为 `5000`。 |
 
 ```txt
 Returned: [12.5,18,24]
@@ -221,53 +221,25 @@ Test lines: 2, 1 read not listed.
 1. await expect(screen.getByRole('listitem')).toHaveCount(12);
 ```
 
-- 变量、循环、条件语句、`try`/`catch`、函数和 JavaScript 内置对象均可使用。`return` 一个 JSON 值即可将其取回。`console.log` 输出的内容也会返回。
-- 对 `screen`、`app` 或 `expect(locator)` 的调用如果以操作、读取或匹配器结束，会作为一条测试代码行运行，使用与测试相同的等待、仅匹配一个节点的规则和匹配器。每次调用都要 `await`。
-- 引擎 fixture 的任何成员都可以调用，例如 `browser.evaluate(() => document.title)` 或 `browser.goto(url)`。传入的函数只会在 fixture 发送其源码的地方运行，与 `evaluate` 相同。不支持由运行器调用的处理函数，例如 `route` 的处理函数。通过代码指定的路径访问主机文件的成员，以及驱动程序的原始客户端，会被拒绝：`setInputFiles`、`screenshot`、带 `path` 的 `addInitScript` 和 `route`、带路径的 `installApp`，以及 `unstable_*`。请使用会检查路径的 `upload` 和 [`screenshot`](#screenshot)。
-- 失败的代码行会抛出 `Error`，其 `code` 是测试会返回的代码。如果未被捕获，代码会停止，结果为错误结果。应用保持在已通过代码行留下的状态。
-- 请对每行代码使用 `await`。如果某行失败，在它之后未等待它就创建的代码行不会运行；没有任何地方 `await` 的失败会使调用失败。`setTimeout` 回调抛出的错误也是如此。
-- 只包含测试代码行的脚本会先整体检查：只要机密值策略拒绝其中一行，所有代码行都不会运行。对于其他代码，运行前只会发现语法错误，被拒绝的代码行在代码执行到它时才失败，此时它之前的代码行已经运行。
+- 代码是在服务器的 Node 进程中运行的普通 JavaScript，作用域内的对象就是测试体得到的对象。调用的等待、匹配和失败方式与测试相同，你传入的函数（例如 `browser.route` 的处理函数）也会像在测试中一样被调用。
+- `return` 一个 JSON 值即可将其取回。`console.log` 输出的内容也会返回。
+- 失败的代码行会抛出测试中会得到的错误，并带有其 `code`。如果未被捕获，代码会停止，结果为错误结果。应用保持在已通过代码行留下的状态。
+- 请对每行代码使用 `await`。没有任何地方 `await` 的失败会使调用失败。代码遗留的被拒绝的 Promise，以及 `setTimeout` 回调抛出的错误也是如此。
 - 结果会列出已运行的代码行。当代码没有返回值也没有输出日志时，读取操作的值也会显示在那里；否则请用 `return` 返回该值。
-- 通过的代码行（读取操作除外）会按执行顺序加入 [`test_lines`](#test_lines) 草稿。对引擎测试夹具的调用如果返回值，则按读取操作处理；但传入函数的调用（例如 `evaluate` 的页面脚本）可能改变页面，因此会保留在草稿中。调用通过 `await` 得到的对象（例如新标签页）会有一行为它命名的 `const` 代码。
-- 代码在运行前按 TypeScript 读取。看起来像类型参数的比较（例如 `[x < y, x > (y)]`）会失败，请加上括号。
-- `expect(value)` 检查代码持有的值，可使用 `toBe`、`toEqual`、`toContain`、`toMatch`、`toHaveLength`、比较匹配器和 `.not`。
-- 每行代码最多等待 `timeout`，包括它自己的 `timeout` 选项。如果配置中的 [`actionTimeout`](/reference/config#actiontimeout) 和 [`assertionTimeout`](/reference/config#assertiontimeout) 更短，则使用更短的值。此上限也涵盖 `app.open`、`app.restart` 和 `app.clearState`，因此首次加载较慢或设备重新启动时应增大它。
-- `setTimeout` 每次调用最多等待 10 秒。`clearTimeout` 可取消它。
-- `timeout` 不会中断正在匹配的正则表达式。会回溯的正则表达式（例如对长文本行使用 `/^(\w+\s?)*$/`）会阻塞服务器，直到匹配结束。
-- 读取操作、匹配器以及引擎测试夹具返回的值，会在已配置机密值所在位置显示 `<secret:name>`。
-- 机密值 `fill` 会对实际填入的字段执行与 `type_secret` 相同的检查：机密值必须已配置，字段必须已启用且可编辑，密码必须填入密码字段。
+- 通过的代码行（读取操作除外）会按执行顺序加入 [`test_lines`](#test_lines) 草稿。以值兑现的调用按读取操作处理；但传入函数的调用（例如 `evaluate` 的页面脚本）可能改变页面，因此会保留在草稿中。调用兑现得到的对象（例如新标签页）会有一行为它命名的 `const` 代码。
+- 对 `screen` 的每个操作或匹配器最多等待 `timeout`。如果配置中的 [`actionTimeout`](/reference/config#actiontimeout) 和 [`assertionTimeout`](/reference/config#assertiontimeout) 更短，则使用更短的值。`app` 和引擎的 fixture 的等待方式与测试相同。
+- 整个调用最多可运行 5 分钟。从不让出控制权的代码（例如 `while (true) {}`）会阻塞服务器。
+- 结果会在已配置机密值所在的位置显示 `<secret:name>`。
 
-代码在沙箱中运行，没有 Node 全局对象、模块、文件或网络。对 `screen`、`app` 或 `expect(locator)` 的调用以测试代码行的形式到达应用，服务器会在运行每行代码前将其解析为以下语法。对引擎测试夹具的调用在主机上运行：
-
-| 部分 | 接受的内容 |
-| --- | --- |
-| 代码行 | 以操作或读取结束的 `screen` 或 `app` 调用链，或带有可选 `.not` 和一个匹配器的 `expect(locator)` |
-| 定位器 | `screen.getByRole`、`getByLabel`、`getByText`、`getByPlaceholder`、`getByTestId` 或 `getByDisplayValue`，可通过 `filter`、`or`、`first`、`last`、`nth` 和更多 `getBy*` 缩小范围 |
-| 参数 | 字符串、数字、布尔值、`null`、正则表达式、数组、对象、定位器，或 `credentials.user(name).username` |
-| 机密值 | `credentials.user(name).password` 或 `secrets.get(name)`，仅可作为 `fill` 的值 |
-
-不包含：`page`、`expect(screen)`、`toHaveScreenshot`、`app.screenshot`、`screen.debug`、`screen.pause`、`all` 和 `setInputFiles`。
-
-| 限制 | 值 |
-| --- | --- |
-| 代码自身的运行时间，不含等待应用的时间 | 5 秒 |
-| 整个调用（到结束时的观察之前） | 5 分钟 |
-| 内存 | 64 MB |
-| 代码行和 `setTimeout` 调用 | 1000 |
-| 返回值 | 1 MB |
+代码不受限制。它拥有测试文件的权限：可以导入模块、读取文件，也可以读取应用显示的值，包括机密值。参阅[安全](/reference/security)。
 
 | 抛出错误 | 何时发生 |
 | --- | --- |
-| `INVALID_ARGUMENT` | 代码无法解析。消息会给出行列位置，不执行任何内容。 |
-| `INVALID_ARGUMENT` | 代码行不符合语法，例如使用了未支持的成员或将函数作为参数。该代码行不会运行。 |
-| `INVALID_ARGUMENT` | 匹配器预期 `<secret:name>`，因为测试比较的是真实值。该代码行不会运行。 |
-| `ASSERTION_FAILED` | `expect(value)` 不成立。 |
-| `POLICY_DENIED` | 向未通过 `type_secret` 检查的字段执行机密值 `fill`。不输入任何内容。 |
-| `POLICY_DENIED` | 读取密码字段。 |
-| `POLICY_DENIED` | 配置声明了机密值或凭据时，定位器通过部分文本查找：使用正则表达式、非 `true` 的 `exact` 或 `hasText`。请按精确文本查找，或使用 `allTextContents()` 读取文本后通过 `nth` 选取。该代码行不会运行。 |
-| `POLICY_DENIED` | 对引擎测试夹具的调用通过路径访问主机文件，或访问驱动程序的原始客户端。不会读取或调用任何内容。 |
+| `INVALID_ARGUMENT` | 代码无法解析。消息会给出所在行，不执行任何内容。 |
+| `ASSERTION_FAILED` | `expect` 不成立。 |
+| `POLICY_DENIED` | 读取安全字段，例如密码输入框。 |
 
-代码超出限制时，调用以不含错误代码的错误结果结束。
+不属于运行器的错误（例如 `TypeError`）会以其名称和抛出位置的行号返回。
 
 #### `test_lines`
 
@@ -470,7 +442,7 @@ open_session {engine: {package: "@e2e-dev/mobile", options: {platform: "ios"}}, 
 会话执行与测试相同的规则：
 
 - 节点 ID 仅对最新观察结果有效。
-- 机密值只能通过 `type_secret` 或 [`run_code`](#run_code) 的 `fill` 填入，并遵循相同检查。
+- 单个操作只能通过 `type_secret` 填入机密值。[`run_code`](#run_code) 会像测试一样填入机密值。
 - 配置加载后，其机密值会从工具返回的所有文本、`locate` 找到的节点、操作结果、`open_session` 或 `close_session` 失败信息、清理信息行以及服务器自身的日志行中脱敏。
 - 会话执行的任何操作都不会记录为测试结果。只有会话运行的测试才会读写回放缓存（[运行测试](#running-a-test)）。其产物写入 `<output>/results/mcp/<target>-<attemptId>/`，视频写入 `<output>/videos/`。之后的 `e2e run` 会清空 `<output>/results`；视频会保留。
 - 客户端取消的排队调用在轮到它时不会执行。
