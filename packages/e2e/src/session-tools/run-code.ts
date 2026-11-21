@@ -33,6 +33,7 @@ import { authorizeSecretFill } from '@e2e-dev/core/lib/agent/secrets';
 import type { TargetSession } from '@e2e-dev/core/lib/engine/surface';
 import { createAsyncExpectation } from '../expect/async.ts';
 import { classifyError, codedMessage, ConfigurationError, TestError, type E2EError } from '@e2e-dev/core/lib/internal/errors';
+import { withTimeout } from '@e2e-dev/core/lib/internal/time';
 import { isPlainObject, rejectUnknownOptions } from '@e2e-dev/core/lib/internal/options';
 import { describeExpression } from '@e2e-dev/core/lib/locator/expression';
 import { createScreen, locatorInternals, type LocatorInternals } from '@e2e-dev/core/lib/locator/screen';
@@ -41,7 +42,7 @@ import type { StandaloneAttempt } from '@e2e-dev/core/lib/run/standalone-attempt
 import { secretHandle } from '@e2e-dev/core/lib/secrets';
 import type { App, Screen, Secret } from '@e2e-dev/core/lib/types';
 import { parseCode, type Call, type Chain, type Statement, type Value } from './code-parse.ts';
-import { FixtureCalls, parseFixtureRequest } from './code-fixtures.ts';
+import { FixtureCalls, parseFixtureRequest, passesFunction } from './code-fixtures.ts';
 import { runInSandbox, type CallReply, type LineReply, type SandboxResult } from './code-sandbox.ts';
 import { SURFACE } from './code-surface.ts';
 
@@ -51,6 +52,8 @@ const RUN_CODE_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 120_000;
 /** The longest one call's whole program may run, waits on the app included. */
 const PROGRAM_TIMEOUT_MS = 300_000;
+/** How long past its limit a fixture call may still answer with its own error before it is given up on. */
+const FIXTURE_GRACE_MS = 250;
 /** Every member that builds a locator, so a query the grammar gains is checked as soon as it is listed. */
 const QUERIES: ReadonlySet<string> = new Set([...SURFACE.locator].flatMap(([name, member]) => (member.kind === 'query' ? [name] : [])));
 /** What the secret ledger writes where a value was. */
@@ -76,6 +79,8 @@ interface RunCodeOptions extends RunCodeSession {
   readonly screen: Pick<ScreenPresenter, 'update'>;
   /** Told the source of every statement that passed and is not a read, in the order they ran, for `test_lines`. */
   readonly record?: ((passed: readonly string[]) => void) | undefined;
+  /** Told the code a call failed with, for the session's count of failures by code. */
+  readonly onFailed?: ((code: string) => void) | undefined;
 }
 
 interface RunCodeArgs {
@@ -163,6 +168,16 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   const wait = (): number => Math.max(1, Math.min(timeout, deadline - Date.now()));
   const runner = new LineRunner(attempt);
   const outcomes: Outcome[] = [];
+  // Every line's source is kept, for the result and test_lines; a read's value only where the result can show it.
+  let dropped = SHOWN_EACH_END;
+  const keep = (outcome: Outcome): void => {
+    outcomes.push(outcome);
+    if (outcomes.length <= MAX_LINES_SHOWN) return;
+    for (; dropped < outcomes.length - SHOWN_EACH_END; dropped++) {
+      const past = outcomes[dropped];
+      if (past !== undefined && 'value' in past) outcomes[dropped] = { source: past.source, read: past.read, value: undefined };
+    }
+  };
   const line = async (source: string): Promise<LineReply> => {
     try {
       const [statement, ...rest] = parseCode(source, { fixtures: options.engineFixtures });
@@ -170,11 +185,11 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
       refuseMarkerExpectation(statement);
       if (runtime.config.allSecrets.size > 0) refuseLocatorByPart(statement);
       const value = await budget.capped(wait(), () => runner.run(statement));
-      outcomes.push({ source: statement.source, read: isRead(statement), value });
+      keep({ source: statement.source, read: isRead(statement), value });
       return { ok: true, value };
     } catch (cause) {
       const error = classifyError(cause);
-      outcomes.push({ source, error });
+      keep({ source, error });
       // The code can read the message, so it passes the ledger here and not only in the rendered result.
       return { ok: false, code: error.code, message: runtime.redact(error.message) };
     }
@@ -185,22 +200,31 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
     try {
       const request = parseFixtureRequest(payload);
       source = `await ${fixtures.describe(request)};`;
-      const settled = await budget.capped(wait(), () => fixtures.run(request));
+      // The fixture's own waits read the budget; a member that does not is answered at the same limit, and left behind.
+      const limit = wait();
+      const settled = await withTimeout(
+        budget.capped(limit, () => fixtures.run(request)),
+        limit + FIXTURE_GRACE_MS,
+        () => new TestError('ACTION_FAILED', `run_code: ${source.slice(6, -1)} did not finish within ${String(limit)} ms`),
+      );
       if ('handle' in settled) {
         // An object the host keeps is a step on the way to a call; the line is the one that names it, when a test needs a name.
-        if (settled.declared !== undefined) outcomes.push({ source: settled.declared, read: false, value: undefined });
+        if (settled.declared !== undefined) keep({ source: settled.declared, read: false, value: undefined });
         return { ok: true, handle: settled.handle };
       }
-      // A call that gives a value back is taken for a read: nothing here says whether it also changed the app.
-      outcomes.push({ source, read: settled.value !== undefined, value: settled.value });
+      // A call that gives a value back is a read, unless it ran a function of the code's, such as a page script, which may have changed the app.
+      keep({ source, read: settled.value !== undefined && !passesFunction(request), value: settled.value });
       return { ok: true, value: settled.value };
     } catch (cause) {
       const error = classifyError(cause);
-      outcomes.push({ source, error });
+      keep({ source, error });
       return { ok: false, code: error.code, message: runtime.redact(error.message) };
     }
   };
-  const result = await runInSandbox({ code: args.code, line, call, fixtures: options.engineFixtures, signal, timeoutMs: PROGRAM_TIMEOUT_MS });
+  const refused = refusedWhole(args.code, options.engineFixtures, runtime.config.allSecrets.size > 0);
+  const result = refused ?? (await runInSandbox({ code: args.code, line, call, fixtures: options.engineFixtures, signal, timeoutMs: PROGRAM_TIMEOUT_MS }));
+  const failure = result.error?.code ?? outcomes.flatMap((outcome) => ('error' in outcome ? [outcome.error.code] : []))[0];
+  if (result.error !== undefined) options.onFailed?.(failure ?? 'ERROR');
   options.record?.(outcomes.flatMap((outcome) => ('error' in outcome || outcome.read ? [] : [outcome.source])));
   let screen: string;
   try {
@@ -209,6 +233,32 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
     screen = `Observing the screen afterwards failed: ${codedMessage(cause)}`;
   }
   return { text: render(result, outcomes, screen), failed: result.error !== undefined };
+}
+
+/**
+ * A script that is only test lines, as `run_code` took before it ran
+ * JavaScript, is checked whole before any line runs: a line the policy
+ * refuses stops the script with the app untouched. Code the grammar does not
+ * read as such a script is JavaScript, and each of its lines is checked when
+ * the code reaches it.
+ */
+function refusedWhole(code: string, fixtures: readonly string[], secrets: boolean): SandboxResult | undefined {
+  let statements: readonly Statement[];
+  try {
+    statements = parseCode(code, { fixtures });
+  } catch {
+    return undefined;
+  }
+  try {
+    for (const statement of statements) {
+      refuseMarkerExpectation(statement);
+      if (secrets) refuseLocatorByPart(statement);
+    }
+    return undefined;
+  } catch (cause) {
+    const error = classifyError(cause);
+    return { value: undefined, error: { code: error.code, message: `${error.code}: ${error.message} No line of the script ran.` }, logs: [] };
+  }
 }
 
 /** Whether a statement only reads, which a test body has no use for once its value is known. */
@@ -445,6 +495,8 @@ class LineRunner {
 
 /** The most lines the result spells out; a longer run shows its first and last ones. */
 const MAX_LINES_SHOWN = 30;
+/** How many lines a longer run shows from each end. */
+const SHOWN_EACH_END = 10;
 
 /**
  * The result: how the program ended, what it logged, each test line, then the
@@ -468,7 +520,7 @@ function render(result: SandboxResult, outcomes: readonly Outcome[], screen: str
     const counts = [...(failed === 0 ? [] : [`${String(failed)} failed`]), ...(reads === 0 ? [] : [`${String(reads)} ${reads === 1 ? 'read' : 'reads'} not listed`])];
     lines.push(`Test lines: ${String(outcomes.length)}${counts.map((count) => `, ${count}`).join('')}.`);
     const numbered = listed.map((outcome, index) => ({ outcome, index }));
-    const shown = numbered.length <= MAX_LINES_SHOWN ? numbered : [...numbered.slice(0, 10), ...numbered.slice(-10)];
+    const shown = numbered.length <= MAX_LINES_SHOWN ? numbered : [...numbered.slice(0, SHOWN_EACH_END), ...numbered.slice(-SHOWN_EACH_END)];
     let previous = -1;
     for (const { outcome, index } of shown) {
       if (index !== previous + 1) lines.push(`   ... ${String(index - previous - 1)} more ...`);

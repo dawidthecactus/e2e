@@ -285,20 +285,27 @@ Test lines: 2, 1 read not listed.
   `browser.evaluate(() => document.title)` or `browser.goto(url)`. A function
   passed to one runs only where the fixture sends its source, as `evaluate`
   does. A handler the runner would call, such as a `route` handler, is not
-  supported.
+  supported. A member that reaches a host file by a path the code names, or
+  the driver's raw client, is refused: `setInputFiles`, `screenshot`,
+  `addInitScript` and `route` with a `path`, `installApp` with a path, and
+  `unstable_*`. Use [`upload`](#actions) and
+  [`screenshot`](#screenshot), which check the path.
 - A line that fails throws an `Error` whose `code` is the code a test would
   get. Uncaught, it stops the code and the result is an error result. The
   app stays where the passing lines left it.
 - `await` each line. Lines made without waiting for one that then fails
   don't run, and a failure nothing awaited fails the call. So does an error
   a `setTimeout` callback throws.
-- Only a syntax error is found before anything runs. A line the grammar
-  refuses fails when the code reaches it, after the lines before it ran.
+- A script that is only test lines is checked whole first: when the
+  secret policy refuses one of its lines, no line runs. In any other code,
+  only a syntax error is found before anything runs, and a refused line
+  fails when the code reaches it, after the lines before it ran.
 - The result lists the lines that ran. A read shows its value there when the
   code returns nothing and logs nothing. Otherwise `return` the value.
 - The lines that pass, except reads, join the [`test_lines`](#test_lines)
   draft in the order they ran. A call on the engine's fixture that returns a
-  value counts as a read, also when it changed the page. An object a call
+  value counts as a read, unless it passes a function, such as a page script
+  for `evaluate`, which may change the page. An object a call
   awaited for, such as a new tab, gets a `const` line that names it.
 - The code is read as TypeScript before it runs. A comparison that reads as
   type arguments, such as `[x < y, x > (y)]`, fails. Put it in parentheses.
@@ -323,8 +330,8 @@ Test lines: 2, 1 read not listed.
 
 The code runs in a sandbox with no Node globals, modules, files, or network
 of its own. A call on the engine's fixture runs on the host.
-It reaches the app only through test lines, and the server parses each line
-into this grammar before it runs:
+A call on `screen`, `app`, or `expect(locator)` reaches the app as a test
+line, and the server parses each line into this grammar before it runs:
 
 | Part | Accepted |
 | --- | --- |
@@ -353,6 +360,7 @@ Left out: `page`, `expect(screen)`, `toHaveScreenshot`, `app.screenshot`,
 | `POLICY_DENIED` | A secret `fill` into a field that fails the `type_secret` checks. Nothing is typed. |
 | `POLICY_DENIED` | A read of a secure field, such as a password input. |
 | `POLICY_DENIED` | When the config declares a secret or credential, a locator found by part of a text: a regular expression, an `exact` other than `true`, or `hasText`. Find it by its exact text, or read the texts with `allTextContents()` and pick with `nth`. The line doesn't run. |
+| `POLICY_DENIED` | A call on the engine's fixture that reaches a host file by path, or the driver's raw client. Nothing is read or called. |
 
 A limit the code crosses ends the call with an error result that carries
 no error code.

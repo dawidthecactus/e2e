@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseCode } from '../../src/session-tools/code-parse.ts';
 import { runInSandbox, type LineReply, type SandboxResult } from '../../src/session-tools/code-sandbox.ts';
+import { expect as sdkExpect } from '../../src/expect/index.ts';
 
 interface Ran extends SandboxResult {
   readonly lines: readonly string[];
@@ -335,6 +336,38 @@ expect('abc').toMatch(pattern);`);
     });
     expect(result.error).toBeUndefined();
     expect(result.value).toBe("INVALID_ARGUMENT: expect takes a locator of screen or a value, and browser.locator('h1') is an object of the engine fixture; await one of its own reads and expect the value");
+  });
+
+  it('gives each value matcher the verdict the test API gives', async () => {
+    const cases: readonly (readonly [string, (check: typeof sdkExpect) => void])[] = [
+      ['expect({ a: 1, b: 2 }).toEqual({ b: 2, a: 1 })', (check) => check({ a: 1, b: 2 }).toEqual({ b: 2, a: 1 })],
+      ['expect({ a: 1 }).toEqual({ a: 1, b: undefined })', (check) => check({ a: 1 }).toEqual({ a: 1, b: undefined })],
+      ['expect([1, [2]]).toEqual([1, [3]])', (check) => check([1, [2]]).toEqual([1, [3]])],
+      ['expect(Array(1)).toEqual([42])', (check) => check(Array(1)).toEqual([42])],
+      ['expect(/a/g).toEqual(/a/g)', (check) => check(/a/g).toEqual(/a/g)],
+      ['expect(/a/).toEqual(/b/)', (check) => check(/a/).toEqual(/b/)],
+      ['expect(new Date(5)).toEqual(new Date(5))', (check) => check(new Date(5)).toEqual(new Date(5))],
+      ['expect([{ id: 1 }]).toContain({ id: 1 })', (check) => check([{ id: 1 }]).toContain({ id: 1 })],
+      ["expect('abc').toContain('d')", (check) => check('abc').toContain('d')],
+      ['expect(5).toContain(5)', (check) => check(5).toContain(5)],
+      ["expect('abc').toMatch(/B/i)", (check) => check('abc').toMatch(/B/i)],
+      ['expect(5).toMatch(/5/)', (check) => check(5).toMatch(/5/)],
+      ["expect('10').toBeGreaterThan(2)", (check) => check('10').toBeGreaterThan(2 as never)],
+      ['expect(3).toBeLessThanOrEqual(3)', (check) => check(3).toBeLessThanOrEqual(3)],
+      ["expect('abc').toHaveLength(3)", (check) => check('abc').toHaveLength(3)],
+      ['expect(5).toHaveLength(1)', (check) => check(5).toHaveLength(1)],
+      ['expect(0).not.toBeTruthy()', (check) => check(0).not.toBeTruthy()],
+      ['expect(null).toBeDefined()', (check) => check(null).toBeDefined()],
+    ];
+    for (const [code, inTest] of cases) {
+      let passesInTest = true;
+      try {
+        inTest(sdkExpect);
+      } catch {
+        passesInTest = false;
+      }
+      expect((await run(`${code};`)).error === undefined, code).toBe(passesInTest);
+    }
   });
 
   it('waits with setTimeout', async () => {

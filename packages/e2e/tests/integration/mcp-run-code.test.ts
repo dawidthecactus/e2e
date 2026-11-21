@@ -196,7 +196,8 @@ return { path: before.replace(/^https?:\\/\\/[^/]+/, ''), inputs: inputs > 0, va
     expect(result.isError, result.text).toBe(false);
     expect(result.text).toMatch(/^Returned: \{"path":"\/","inputs":true,"value":"by selector","tabs":1\}\n/);
     expect(result.text).toContain("await browser.locator('input').first().fill('by selector');\n");
-    expect(result.text).not.toContain("document.querySelector('input').value);");
+    // A page script may change the page, so its line is kept, value or not.
+    expect(result.text).toContain("await browser.evaluate(() => document.querySelector('input').value); -> \"by selector\"\n");
     expect(result.text).not.toMatch(/^\d+\. await browser\.locator\('input'\);$/m);
 
     for (const code of [
@@ -227,6 +228,16 @@ return (await browser.reload()) === undefined;`);
     const drafted = await call('test_lines');
     expect(drafted.text).toMatch(/\nconst (newTab\d+) = await browser\.newTab\(\);\nawait \1\.activate\(\);\nawait \1\.close\(\);\nawait browser\.reload\(\);\n/);
     expect(drafted.text).toContain('async ({ app, screen, browser }) => { ... }');
+  });
+
+  it('refuses a host file by path, drafts a page script that may change the page, and checks a script of lines whole', async () => {
+    const upload = await runCode("await browser.locator('input').first().setInputFiles('/etc/hosts');");
+    expect(upload.isError).toBe(true);
+    expect(upload.text).toMatch(/^Failed: POLICY_DENIED: run_code: browser\.locator\('input'\)\.first\(\)\.setInputFiles\('\/etc\/hosts'\) reaches a file on the host by path/);
+
+    const titled = await runCode("return await browser.evaluate(() => { document.title = 'Changed'; return document.title; });");
+    expect(titled.text).toMatch(/^Returned: "Changed"\n/);
+    expect((await call('test_lines')).text).toContain("\nawait browser.evaluate(() => { document.title = 'Changed'; return document.title; });\n");
   });
 
   it('runs a locator built with or, as a test would', async () => {
@@ -369,7 +380,7 @@ await expect(screen.getByTestId('plain')).toHaveText('nothing yet');`, 300);
         const marker = await runCode(code);
         expect(marker.isError, code).toBe(true);
         expect(marker.text, code).toMatch(
-          /^Failed: INVALID_ARGUMENT: run_code: await expect\(screen\.getByTestId\('plain'\)\)\.toHaveText\('<secret:apiKey>'\); expects <secret:name>, which only redacted text holds: .* the line did not run\.\n/,
+          /^Failed: INVALID_ARGUMENT: run_code: await expect\(screen\.getByTestId\('plain'\)\)\.toHaveText\('<secret:apiKey>'\); expects <secret:name>, which only redacted text holds: .* the line did not run\.(?: No line of the script ran\.)?\n/,
         );
       }
     });
@@ -400,9 +411,17 @@ return { value, length: value.length, starts: value.startsWith('sk-'), handles: 
         const probed = await runCode(code);
         expect(probed.isError, code).toBe(true);
         expect(probed.text, code).toMatch(/^Failed: POLICY_DENIED: run_code: .* finds a locator by part of a text, and this project configures secrets/);
-        expect(probed.text, code).toContain('the line did not run.');
-        expect(probed.text, code).toContain(`Test lines: ${String(lines)}, 1 failed.`);
+        expect(probed.text, code).toContain('the line did not run. No line of the script ran.');
+        // The same line inside JavaScript is refused where the code reaches it.
+        const inCode = await runCode(`const found = ${code.replace(/;$/, '')};\nreturn found;`);
+        expect(inCode.text, code).toMatch(/^Failed: POLICY_DENIED: run_code: .* finds a locator by part of a text/);
+        expect(inCode.text, code).toContain(`Test lines: ${String(lines)}, 1 failed.`);
       }
+      // A script of lines is checked whole: the fill ahead of the refused line never runs.
+      const whole = await runCode("await screen.getByLabel('Token').fill('overwritten');\nawait screen.getByText(/sk/).count();");
+      expect(whole.isError).toBe(true);
+      expect(whole.text).toContain('No line of the script ran.');
+      expect(whole.text).not.toContain('Test lines:');
       const exact = await runCode("await screen.getByDisplayValue('sk-live-WRONG').count();");
       expect(exact.isError, exact.text).toBe(false);
       expect(exact.text).toContain('-> 0\n');

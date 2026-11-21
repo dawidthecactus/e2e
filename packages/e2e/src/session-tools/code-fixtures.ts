@@ -50,6 +50,21 @@ export type FixtureResult =
   /** `declared` is the line that names the object in a test, when a call awaited to get it. */
   | { readonly handle: number; readonly declared?: string | undefined };
 
+/**
+ * Members that reach a file on the host by a path the caller names, or the
+ * driver's raw client. A test's own code may; the code here is a coding
+ * agent's, and the `upload` and `screenshot` tools are where its paths are
+ * checked against the project root. The engines do not yet confine paths
+ * themselves, so these are refused by name: a member that takes a host path
+ * and is not listed is not refused.
+ */
+const HOST_MEMBERS = new Set(['setInputFiles', 'screenshot']);
+/** Members that read a host file when an argument is an object naming a `path`: an init script's file, a route's body. */
+const HOST_PATH_OPTION = new Set(['addInitScript', 'route', 'fulfill']);
+/** Members that take a host path as their first argument when one is given. */
+const HOST_PATH_ARGUMENT = new Set(['installApp']);
+const RAW_PREFIX = 'unstable_';
+
 /** Members every object or function inherits, which lead out of the fixture to the host. */
 const INHERITED = new Set(['constructor', '__proto__', 'prototype']);
 const MAX_DEPTH = 50;
@@ -85,6 +100,7 @@ export class FixtureCalls {
     const source = this.describe(request);
     let receiver: unknown = 'root' in request.base ? this.root(request.base.root) : this.handles[request.base.handle]?.object;
     if (receiver === undefined) throw new TestError('INVALID_ARGUMENT', `run_code: ${source} starts from nothing this session has`);
+    refuseHostReach(request, source);
     const read = args === undefined ? path : path.slice(0, -1);
     for (const name of read) receiver = member(receiver, name, source);
     if (args === undefined) return this.result(receiver, source, path.at(-1));
@@ -148,6 +164,28 @@ export class FixtureCalls {
     if (typeof value !== 'object' || value === null) return value;
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [this.redact(key), this.redacted(item)]));
   }
+}
+
+/** Refuses, before anything is read or called, a request that reaches the host outside the app. */
+function refuseHostReach(request: FixtureRequest, source: string): void {
+  const { path, args } = request;
+  const called = args === undefined ? undefined : path.at(-1);
+  const namesPath = (arg: Encoded | undefined): boolean => arg?.t === 'object' && arg.v.some(([key]) => key === 'path');
+  const reaches =
+    path.some((name) => name.startsWith(RAW_PREFIX) || HOST_MEMBERS.has(name)) ||
+    (called !== undefined && HOST_PATH_OPTION.has(called) && (args ?? []).some(namesPath)) ||
+    (called !== undefined && HOST_PATH_ARGUMENT.has(called) && args?.[0]?.t === 'value' && typeof args[0].v === 'string');
+  if (!reaches) return;
+  throw new TestError(
+    'POLICY_DENIED',
+    `run_code: ${source} reaches a file on the host by path, or the driver's raw client, which code in run_code may not; attach a file with the upload tool and save an image with the screenshot tool, which check the path`,
+  );
+}
+
+/** Whether a call hands the fixture a function of the code's, which runs where the fixture sends it and may change the app. */
+export function passesFunction(request: FixtureRequest): boolean {
+  const holds = (arg: Encoded): boolean => arg.t === 'function' || (arg.t === 'array' && arg.v.some(holds)) || (arg.t === 'object' && arg.v.some(([, item]) => holds(item)));
+  return (request.args ?? []).some(holds);
 }
 
 /** An argument as a test would write it. */

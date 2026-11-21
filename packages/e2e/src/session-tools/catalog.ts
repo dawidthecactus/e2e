@@ -80,6 +80,8 @@ export interface CatalogOptions {
   readonly warn: (message: string) => void;
   /** Told the cause of every grammar action that failed into a result. */
   readonly onActionFailed?: ((cause: unknown) => void) | undefined;
+  /** Told the code a `run_code` call failed with: its result is rendered text, which carries no code of its own. */
+  readonly onRunCodeFailed?: ((code: string) => void) | undefined;
   /** The attempt's fixtures and what guards them, for `run_code`; without them the catalog has no `run_code`. */
   readonly runCode?: RunCodeSession | undefined;
 }
@@ -109,7 +111,7 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
     observe: fullObserveTool(context, screen),
     ...lines.wrap(verbs),
     locate: locateTool(locator, options.session, options.redaction),
-    ...(options.runCode === undefined ? {} : { run_code: runCodeTool({ ...options.runCode, context, screen, record: (passed) => lines.ran(passed) }) }),
+    ...(options.runCode === undefined ? {} : { run_code: runCodeTool({ ...options.runCode, context, screen, record: (passed) => lines.ran(passed), onFailed: options.onRunCodeFailed }) }),
     test_lines: lines.tool(),
     ...recording,
   };

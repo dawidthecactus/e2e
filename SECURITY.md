@@ -54,7 +54,11 @@ network of its own. Each call it makes on `screen`, `app`, or `expect` is
 parsed into a closed grammar before the runner performs it. A call on the
 engine's fixture (`browser`, `device`) runs on the host with the code's
 arguments and reaches any member a test can call, page scripts included, so
-the code can read what a test can read. What comes back has the exact value
+the code can read what a test can read. A member known to reach a host file
+by a path the code names, or the driver's raw client, is refused
+(`setInputFiles`, `screenshot`, `addInitScript` and `route` with a `path`,
+`installApp` with a path, `unstable_*`); the engines do not confine paths
+themselves yet, so a member outside that list is not. What comes back has the exact value
 of each configured secret redacted. A secret the app holds can still reach
 the coding agent in a changed form, such as reversed or encoded by a page
 script: this is an accepted limit of `run_code`, and the one exception to

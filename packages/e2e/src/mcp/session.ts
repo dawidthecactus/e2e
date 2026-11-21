@@ -318,8 +318,8 @@ export class SessionHost {
     return this.run(live, () => invokeTool(name, tool, args, extra)).then(
       (result) => {
         if (!isGrammarVerb(name)) {
-          // A grammar action's failure was counted with its code as it happened; a project tool's result carries none.
-          if (result.isError === true) live.usage.failed(undefined);
+          // A grammar action's failure, and run_code's, was counted with its code as it happened; a project tool's result carries none.
+          if (result.isError === true && name !== 'run_code') live.usage.failed(undefined);
           return redactResult(result, redact);
         }
         return redactResult(actionResult(name, result), redact);
@@ -483,6 +483,7 @@ export class SessionHost {
         }),
         warn: (message) => this.log('warning', message),
         onActionFailed: (cause) => usage.failed(classifyError(cause).code),
+        onRunCodeFailed: (code) => usage.failed(code),
         runCode: { attempt: () => attempt, engineFixtures: Object.keys(target.engine?.fixtures ?? {}) },
       });
       const live: LiveSession = {

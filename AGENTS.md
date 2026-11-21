@@ -742,7 +742,8 @@ trees, on both platforms, without a device.
     sandbox with no host access, and parses each call it makes on `screen`,
     `app`, or `expect` into the closed grammar of `code-parse.ts`; a call on
     an engine fixture reaches any member by name (`code-fixtures.ts`), never
-    what every object inherits, runs no function of the code's on the host,
+    what every object inherits or a member listed there as reaching a host
+    file by path, runs no function of the code's on the host,
     and returns through the secret ledger. That ledger replaces a secret's
     exact value only. An accepted exception to the first invariant: through
     an engine fixture, such as a page script in `browser.evaluate`, the code
