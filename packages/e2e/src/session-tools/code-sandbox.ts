@@ -49,13 +49,6 @@ const MAX_BRIDGE_REQUESTS = 1_000;
 /** The longest one `setTimeout` waits. */
 const MAX_SLEEP_MS = 10_000;
 
-/** Names a Playwright habit reaches for, and the e2e member that does the same. */
-const ALIASES: Readonly<Record<string, string>> = {
-  scrollIntoViewIfNeeded: 'scrollIntoView',
-  innerText: 'textContent',
-  allInnerTexts: 'allTextContents',
-};
-
 const QUERIES = [...SURFACE.locator].flatMap(([name, member]) => (member.kind === 'query' ? [name] : []));
 
 /**
@@ -82,7 +75,6 @@ const __lit = (value, loose) => {
   __refuse('a ' + typeof value + ' is not an argument a test line takes');
 };
 const __args = (values, loose) => { while (values.length > 0 && values[values.length - 1] === undefined) values.pop(); return values.map((value) => __lit(value, loose)).join(', '); };
-const __aliases = new Map(Object.entries(${JSON.stringify(ALIASES)}));
 const __pending = new Set();
 const __sent = [];
 // What a line gives the code is not a Promise but something awaitable, so that a line the code never waited on is known:
@@ -137,11 +129,8 @@ const __chain = (source, ends) => new Proxy(function () {}, {
     if (name === Symbol.toPrimitive || name === 'toString' || name === 'valueOf') return () => source;
     if (typeof name !== 'string' || name === 'then' || name === 'toJSON') return undefined;
     return (...values) => {
-      const scroll = name === 'scroll';
-      const member = scroll ? 'swipe' : __aliases.get(name) ?? name;
-      const given = scroll ? [{ direction: typeof values[0] === 'string' ? values[0] : (values[0] && values[0].direction) || 'down' }] : values;
-      const next = source + '.' + member + '(' + __args(given) + ')';
-      return !ends && __queries.has(member) ? __chain(next, false) : __send('await ' + next + ';');
+      const next = source + '.' + name + '(' + __args(values) + ')';
+      return !ends && __queries.has(name) ? __chain(next, false) : __send('await ' + next + ';');
     };
   },
 });

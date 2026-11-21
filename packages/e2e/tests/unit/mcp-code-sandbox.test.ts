@@ -57,19 +57,6 @@ await screen.getByLabel('Token').fill(secrets.get('apiKey'), undefined);`);
     expect(fill!.body).toMatchObject({ chain: { calls: [{}, { name: 'fill', args: [{ kind: 'literal', value: 'it\'s a "quote"\\ and\na new line ' }] }] } });
   });
 
-  it('maps the names a Playwright habit reaches for onto the members that do the same', async () => {
-    const ran = await run(`await screen.getByText('Row').scrollIntoViewIfNeeded();
-await screen.getByText('Row').innerText();
-await screen.getByRole('list').scroll('up');
-await screen.getByRole('list').scroll();`);
-    expect(ran.lines).toEqual([
-      "await screen.getByText('Row').scrollIntoView();",
-      "await screen.getByText('Row').textContent();",
-      "await screen.getByRole('list').swipe({ direction: 'up' });",
-      "await screen.getByRole('list').swipe({ direction: 'down' });",
-    ]);
-  });
-
   it('hands a reply to the code as a value, or as a thrown error with the code', async () => {
     const ran = await run(
       `const texts = await screen.getByRole('listitem').allTextContents();
