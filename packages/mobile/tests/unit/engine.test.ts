@@ -551,6 +551,12 @@ describe('lifecycle', () => {
         owner: { session: `transient:${command}`, workspace: '/elsewhere', stateDir: '/elsewhere/.agent-device' },
         dispatched: 'no',
       });
+    // A rejection is read as a value, so a device that is moved or refused fails an assertion that names the case.
+    const settle = (prepared: ReturnType<Harness['prepare']>) =>
+      prepared.then(
+        (result) => ({ env: (result?.env ?? {}) as Record<string, string>, rejected: undefined as string | undefined }),
+        (error: unknown) => ({ env: {} as Record<string, string>, rejected: error instanceof Error ? error.message : String(error) }),
+      );
     for (const [method, command] of [['command.prepare', 'install'], ['apps.open', 'install'], ['command.prepare', 'prepare']] as const) {
       const h = harness({ device: undefined });
       h.fake.respond('devices.list', () => [{ platform: 'ios', id: 'A', name: 'A', booted: true }]);
@@ -561,7 +567,8 @@ describe('lifecycle', () => {
       });
       const lines: string[] = [];
       const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, headed: false, log: (line: string) => void lines.push(line) };
-      const env = ((await h.prepare(info))?.env ?? {}) as Record<string, string>;
+      const { env, rejected } = await settle(h.prepare(info));
+      expect(rejected, `${method} refused by transient:${command}`).toBeUndefined();
       expect(env[poolVariableIn(env, 'IOS')], `${method} refused by transient:${command}`).toBe(JSON.stringify([{ deviceId: 'A' }]));
       expect(lines.some((line) => line.includes('trying the next free device')), lines.join(' | ')).toBe(false);
       await expect(boot(h, 'ios', 0, env)).resolves.toBeUndefined();
@@ -575,8 +582,9 @@ describe('lifecycle', () => {
       return {};
     });
     const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, headed: false, log: () => undefined };
-    const env = ((await busy.prepare(info))?.env ?? {}) as Record<string, string>;
-    expect(env[poolVariableIn(env, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B' }]));
+    const moved = await settle(busy.prepare(info));
+    expect(moved.rejected, 'devices.boot refused by transient:prepare').toBeUndefined();
+    expect(moved.env[poolVariableIn(moved.env, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B' }]));
   });
 
   it('moves a discovered slot to the next free device when another session takes its device between the inventory and the warm-up', async () => {
@@ -733,6 +741,17 @@ describe('lifecycle', () => {
       expect(await bound(stale.prepare(info)), reason).toBe('rejected: boot failed: ios device A is owned by session "e2e-ios-host-gone-0" in workspace "/w".');
     }
 
+    // A refusal that names a session but is not DEVICE_IN_USE (a session bound to another device) names no holder:
+    // the open is logged and left to the first attempt, and the slot keeps its device.
+    const rebound = harness({ device: undefined });
+    rebound.fake.respond('devices.list', () => free);
+    rebound.fake.respond('apps.open', () => {
+      throw new AppError('INVALID_ARGS', 'Session "e2e-ios-host-other-0" is already bound to A, but this request selected B.', { session: 'e2e-ios-host-other-0' });
+    });
+    const reboundLines: string[] = [];
+    expect(await bound(rebound.prepare({ ...info, log: (line) => reboundLines.push(line) }))).toBe(JSON.stringify([{ deviceId: 'A' }]));
+    expect(reboundLines.some((line) => line.includes('did not open')), reboundLines.join(' | ')).toBe(true);
+
     // Another project's run holds A under this target's own session name, which the inventory reads as this run's:
     // once refused, A counts as held, and with nothing else free agent-device's refusal is the error.
     const elsewhere = harness({ device: undefined });
@@ -759,7 +778,7 @@ describe('lifecycle', () => {
       const last = after.length === 0 ? 'A' : 'C';
       await expect(taken.prepare(info)).rejects.toMatchObject({
         code: 'ENGINE_FAILURE',
-        message: expect.stringMatching(
+          message: expect.stringMatching(
           new RegExp(`^boot failed: ios device ${last} is owned by session "e2e-ios-host-other-0" in workspace "/w"\\. Hint: Inspect the owner with: agent-device device status --platform ios --udid ${last}; no other booted ios device is free for worker slot 0: `),
         ),
         cause: expect.objectContaining({ message: expect.stringMatching(new RegExp(`^boot failed: ios device ${last} is owned by`)) }),
