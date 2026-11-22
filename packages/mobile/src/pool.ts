@@ -66,12 +66,6 @@ export function bootRequest(selection: DeviceSelection): DeviceSelection & Pick<
   return named === undefined ? { ...selection, pick: 'newest' } : selection;
 }
 
-/** A session `warm` opened, under the name `finish` reports it by. */
-interface WarmedSession {
-  readonly session: string;
-  readonly client: AgentDeviceClient;
-}
-
 /** What names a slot's session: the target, and the `launch()` host holding it, if one does. */
 export interface SessionOwner {
   readonly targetName: string;
@@ -357,13 +351,13 @@ export class DevicePool {
    * shares its name, so nothing would take its device back.
    */
   async finish(info: EngineFinishInfo): Promise<void> {
-    const sessions: WarmedSession[] = Array.from(this.warmed.get(info.targetName) ?? [], ([session, client]) => ({ session, client }));
+    const sessions = [...(this.warmed.get(info.targetName) ?? [])];
     this.warmed.delete(info.targetName);
     // A released lease's daemon must not serve a later init, and an engine reused across hosts must not pile up their bindings.
     this.bound.delete(info.targetName);
-    const open = new Map<string, string>(sessions.map(({ session }) => [session, 'the close did not finish in time']));
+    const open = new Map<string, string>(sessions.map(([session]) => [session, 'the close did not finish in time']));
     const closing = withinCleanupBudget(
-      Promise.all(sessions.map(async ({ session, client }) => {
+      Promise.all(sessions.map(async ([session, client]) => {
         try {
           await client.sessions.close();
           open.delete(session);
@@ -437,8 +431,8 @@ export class DevicePool {
       }
     } catch (cause) {
       const holder = movable ? deviceHolder(cause) : undefined;
-      if (holder === undefined || binding.deviceId === undefined) throw cause;
-      throw new TakenDevice(binding.deviceId, holder, cause as Error);
+      if (holder === undefined || binding.deviceId === undefined || !(cause instanceof Error)) throw cause;
+      throw new TakenDevice(binding.deviceId, holder, cause);
     } finally {
       info.log(`${label}: ${took.join(', ')}`);
     }
