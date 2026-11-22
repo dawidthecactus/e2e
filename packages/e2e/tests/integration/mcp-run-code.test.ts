@@ -192,6 +192,11 @@ return { path: before.replace(/^https?:\\/\\/[^/]+/, ''), inputs: inputs > 0, va
     expect(result.text).toContain("await browser.evaluate(() => document.querySelector('input').value); -> \"by selector\"\n");
     expect(result.text).not.toMatch(/^\d+\. await browser\.locator\('input'\);$/m);
 
+    // A long value is returned whole once; its line shows the start.
+    const long = await runCode("return await browser.evaluate(() => 'x'.repeat(5000));");
+    expect(long.text).toContain(`Returned: "${'x'.repeat(5000)}"\n`);
+    expect(long.text).toContain(`-> "${'x'.repeat(199)}... (4802 more characters)\n`);
+
     // A handler is the code's own function, called in the server as a test's is.
     const routed = await runCode(`let requests = 0;
 await browser.route('**/*', (route) => { requests++; return route.continue(); });

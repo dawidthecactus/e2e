@@ -304,6 +304,8 @@ function redacted(value: unknown, redact: (text: string) => string, depth = 0): 
 const MAX_LINES_SHOWN = 30;
 /** How many lines a longer run shows from each end. */
 const SHOWN_EACH_END = 10;
+/** The most characters of a line's value the result shows; the code returns what the agent wants whole. */
+const MAX_VALUE_SHOWN = 200;
 
 /**
  * The result: how the code ended, what it logged, each test line, then the
@@ -337,7 +339,7 @@ function render(result: Ended, outcomes: readonly Outcome[], screen: string, red
         lines.push(`${number} failed: ${outcome.source}`, indent(`${outcome.error.code}: ${outcome.error.message}`));
       } else {
         const value = redacted(outcome.value, redact);
-        lines.push(`${number} ${outcome.source}${value === undefined ? '' : ` -> ${show(value)}`}`);
+        lines.push(`${number} ${outcome.source}${value === undefined ? '' : ` -> ${shortened(show(value))}`}`);
       }
     }
   }
@@ -351,6 +353,10 @@ function show(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function shortened(text: string): string {
+  return text.length <= MAX_VALUE_SHOWN ? text : `${text.slice(0, MAX_VALUE_SHOWN)}... (${String(text.length - MAX_VALUE_SHOWN)} more characters)`;
 }
 
 function indent(text: string): string {
