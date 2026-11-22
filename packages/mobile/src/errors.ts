@@ -317,23 +317,32 @@ const LIVE_HOLDER_REASONS: ReadonlySet<unknown> = new Set([undefined, 'DEVICE_CL
 
 /**
  * How agent-device names the claim one command (boot, prepare, install, push)
- * takes for its own length: `transient:<command>`. It ends with the command,
- * so it holds the device for no session.
+ * takes for its own length: `transient:<command>`. It ends with the command.
  */
 const TRANSIENT_HOLDER = 'transient:';
 
 /**
  * The session holding the device, for a translated command agent-device
  * refused because another live session holds that device, as its claim
- * (`owner.session`) or its daemon (`session`) names it; `undefined` for any
- * other failure, a short-lived command's claim included.
+ * (`owner.session`) or its daemon (`session`) names it, a short-lived
+ * command's claim included; `undefined` for any other failure.
  */
 export function deviceHolder(error: unknown): string | undefined {
   if (!(error instanceof Error) || !isAgentDeviceError(error.cause) || normalizeAgentDeviceError(error.cause).code !== 'DEVICE_IN_USE') return undefined;
   const { reason, owner, session } = details(error.cause);
   if (!LIVE_HOLDER_REASONS.has(reason)) return undefined;
   const holder = typeof owner === 'object' && owner !== null ? (owner as { session?: unknown }).session : session;
-  return typeof holder === 'string' && !holder.startsWith(TRANSIENT_HOLDER) ? holder : undefined;
+  return typeof holder === 'string' ? holder : undefined;
+}
+
+/**
+ * The session holding the device, as `deviceHolder` reads it, unless the
+ * holder is a short-lived command's claim, which ends with the command and so
+ * holds the device for no session.
+ */
+export function sessionHolder(error: unknown): string | undefined {
+  const holder = deviceHolder(error);
+  return holder?.startsWith(TRANSIENT_HOLDER) === true ? undefined : holder;
 }
 
 /** True for a translated `open` agent-device refused because no installed app matches the name. */

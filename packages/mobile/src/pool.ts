@@ -22,7 +22,7 @@ import {
   type EnginePrepareResult,
 } from '@e2e-dev/core/engine';
 import { bindingsVariable, decodeBindings, deviceLabel, encodeBindings, pinnedApp, type DeviceSource, type SlotBinding } from './bindings.ts';
-import { deviceHolder, isNoSession, isRunnerFailure, message, runCommand } from './errors.ts';
+import { deviceHolder, isNoSession, isRunnerFailure, message, runCommand, sessionHolder } from './errors.ts';
 import type { AgentDeviceClient, MobileOptions, MobilePlatform, ClientFactory } from './options.ts';
 import { asDeviceProvider, LeasedDevices, type RecordingDeviceProvider } from './provider.ts';
 
@@ -428,7 +428,7 @@ export class DevicePool {
       try {
         await timed(took, `open ${app}`, () => runCommand(`open ${app}`, () => client.apps.open({ app, ...where }), info.signal, at));
       } catch (cause) {
-        if (info.signal.aborted || isRunnerFailure(cause) || (movable && deviceHolder(cause) !== undefined)) throw cause;
+        if (info.signal.aborted || isRunnerFailure(cause) || (movable && sessionHolder(cause) !== undefined)) throw cause;
         info.log(`${label}: ${app} did not open (${message(cause)}); the first attempt opens it`);
       }
     } catch (cause) {
@@ -475,7 +475,7 @@ async function prepareRunner(client: AgentDeviceClient, where: DeviceSelection, 
     await runCommand('prepare ios-runner', () => client.command.prepare({ action: 'ios-runner', ...where }), info.signal, at);
     return true;
   } catch (cause) {
-    if (info.signal.aborted || isRunnerFailure(cause) || (movable && deviceHolder(cause) !== undefined)) throw cause;
+    if (info.signal.aborted || isRunnerFailure(cause) || (movable && sessionHolder(cause) !== undefined)) throw cause;
     info.log(`${at}: automation runner not prepared (${message(cause)}); the first attempt starts it`);
     return false;
   }

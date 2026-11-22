@@ -566,6 +566,17 @@ describe('lifecycle', () => {
       expect(lines.some((line) => line.includes('trying the next free device')), lines.join(' | ')).toBe(false);
       await expect(boot(h, 'ios', 0, env)).resolves.toBeUndefined();
     }
+    // A boot it refused still moves the slot: another free device costs nothing, and a boot failure ends the run on main.
+    const busy = harness({ device: undefined });
+    busy.fake.respond('devices.list', () => [{ platform: 'ios', id: 'A', name: 'A', booted: true }, { platform: 'ios', id: 'B', name: 'B', booted: true }]);
+    let bootRefused = 0;
+    busy.fake.respond('devices.boot', () => {
+      if (bootRefused++ === 0) throw transient('prepare');
+      return {};
+    });
+    const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, headed: false, log: () => undefined };
+    const env = ((await busy.prepare(info))?.env ?? {}) as Record<string, string>;
+    expect(env[poolVariableIn(env, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B' }]));
   });
 
   it('moves a discovered slot to the next free device when another session takes its device between the inventory and the warm-up', async () => {
