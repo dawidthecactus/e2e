@@ -541,8 +541,35 @@ describe('lifecycle', () => {
     await optioned.engine.finish!(finish);
   });
 
+  it('keeps a device a short-lived agent-device command refused at the runner start or the open, as before the move', async () => {
+    // agent-device 0.21.41 claims a device for the length of one command (boot, prepare, install, push) as
+    // `transient:<command>`, refused like a live owner. That claim ends with the command, so the worker's start finds
+    // the device free: the warm-up logs the refusal and leaves the runner or the app to the first attempt.
+    const transient = (command: string): AppError =>
+      new AppError('DEVICE_IN_USE', `ios device A is owned by session "transient:${command}" in workspace "/elsewhere".`, {
+        reason: 'DEVICE_CLAIM_LIVE_OWNER',
+        owner: { session: `transient:${command}`, workspace: '/elsewhere', stateDir: '/elsewhere/.agent-device' },
+        dispatched: 'no',
+      });
+    for (const [method, command] of [['command.prepare', 'install'], ['apps.open', 'install'], ['command.prepare', 'prepare']] as const) {
+      const h = harness({ device: undefined });
+      h.fake.respond('devices.list', () => [{ platform: 'ios', id: 'A', name: 'A', booted: true }]);
+      let refused = 0;
+      h.fake.respond(method, () => {
+        if (refused++ === 0) throw transient(command);
+        return method === 'apps.open' ? { session: 's', appName: 'Settings', appBundleId: 'com.apple.Preferences', identifiers: {} } : {};
+      });
+      const lines: string[] = [];
+      const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, headed: false, log: (line: string) => void lines.push(line) };
+      const env = ((await h.prepare(info))?.env ?? {}) as Record<string, string>;
+      expect(env[poolVariableIn(env, 'IOS')], `${method} refused by transient:${command}`).toBe(JSON.stringify([{ deviceId: 'A' }]));
+      expect(lines.some((line) => line.includes('trying the next free device')), lines.join(' | ')).toBe(false);
+      await expect(boot(h, 'ios', 0, env)).resolves.toBeUndefined();
+    }
+  });
+
   it('moves a discovered slot to the next free device when another session takes its device between the inventory and the warm-up', async () => {
-    // agent-device 0.21.40 refuses a device another live session holds in three shapes: a claim names the holder in
+    // agent-device 0.21.41 refuses a device another live session holds in three shapes: a claim names the holder in
     // `owner.session`, a session of the same daemon in `session` with no reason, and a workspace session in `session`.
     // Past 50 refusals it reports a loop instead, so a retry that never ends fails an assertion rather than the run.
     let refusals = 0;

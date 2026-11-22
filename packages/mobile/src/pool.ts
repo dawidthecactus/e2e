@@ -385,11 +385,13 @@ export class DevicePool {
    * `app.open()` finds it on screen. A plain foreground open, with none of the engine's
    * launch options: an app still running from an earlier run keeps its
    * process either way, and a test's `app.open()` relaunches it with them.
-   * One slot after another, on purpose: workers
+   * `prepare` warms one slot after another, on purpose: workers
    * booting at once in `init` contend for the host and the daemon, and one
    * cold boot pushes the others past `launchTimeout`. Each slot warms under
    * the session its worker resumes. A device that cannot boot ends the run
-   * here; an app that does not open is logged and left to the first attempt.
+   * here; an app that does not open is logged and left to the first attempt,
+   * unless another live session refused a device the pool found, which
+   * `prepare` then swaps for the next free one.
    * An automation runner that is busy or wedged from an earlier run ends it
    * here too: the first attempt could only meet the same runner and fail
    * its first observation with the app blamed, and the message names the
