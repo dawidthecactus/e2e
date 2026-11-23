@@ -358,10 +358,11 @@ export class FileCacheStore implements CacheStore {
    * the store wrote it is not one.
    */
   private async load(name: string): Promise<LoadedFile | undefined> {
-    // Every step of a test reads its whole pair; parse it again only when a file changed.
-    // A rewrite renames a new file into place, so its inode changes even within one mtime tick.
+    // Every step of a test reads its whole pair; parse it again only when a file changed. A rewrite
+    // renames a new file into place, so its inode changes even within one mtime tick; a change of
+    // mode (a file made readable again) moves only its ctime.
     const stamps = await Promise.all([RECORDING_EXTENSION, LOCK_EXTENSION].map((extension) =>
-      stat(this.path(name, extension)).then((stats) => `${stats.ino}:${stats.size}:${stats.mtimeMs}`, () => '-'),
+      stat(this.path(name, extension)).then((stats) => `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`, () => '-'),
     ));
     const stamp = stamps.join(' ');
     // Shared by every store on the directory: a worker's attempts each make their own.

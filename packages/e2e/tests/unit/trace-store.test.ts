@@ -585,6 +585,8 @@ describe('FileCacheStore', () => {
       await chmod(yamlPath(directory), 0o600);
       await chmod(lockPath(directory), 0o600);
     }
+    // Readable again: the same store reads it, not what it saw before.
+    expect((await store.read(KEY, step())).status).toBe('hit');
   });
 
   it('refuses to write a file over its byte cap', async () => {
