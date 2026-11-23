@@ -46,7 +46,7 @@ describe('SessionState', () => {
     await expect(SessionState.import(new TextEncoder().encode('{}'), { key })).rejects.toMatchObject({ code: 'SESSION_INVALID' });
     await expect(SessionState.import(new TextEncoder().encode('not json'), { key })).rejects.toMatchObject({ code: 'SESSION_INVALID' });
     // An unknown field JSON parses to Infinity, which the canonical JSON the tag covers cannot hold.
-    await expect(SessionState.import(new TextEncoder().encode(text(bytes).replace('{', '{"note":1e400,')), { key })).rejects.toMatchObject({ code: 'SESSION_INVALID' });
+    await expect(SessionState.import(new TextEncoder().encode(`{"note":1e400,${text(bytes).slice(1)}`), { key })).rejects.toMatchObject({ code: 'SESSION_INVALID' });
     for (const field of ['iv', 'tag'] as const) {
       const malformed = JSON.parse(text(bytes)) as { state: Record<string, string> };
       malformed.state[field] = '';
