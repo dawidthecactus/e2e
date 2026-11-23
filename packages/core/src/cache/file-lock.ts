@@ -8,7 +8,7 @@
  * In one process the holders queue on a promise; across processes on a
  * file created with `wx`. A lock file older than `STALE_MS` was left by a
  * writer that died holding it, since no holder keeps it longer than a
- * file read and two writes, and is taken over.
+ * file read and two writes, and is taken over (`takeOver`).
  */
 
 import { open, stat, unlink } from 'node:fs/promises';
@@ -59,10 +59,36 @@ async function acquire(lockPath: string): Promise<void> {
     }
     const age = await stat(lockPath).then((stats) => Date.now() - stats.mtimeMs, () => undefined);
     if (age !== undefined && age > STALE_MS) {
-      await unlink(lockPath).catch(() => undefined);
+      await takeOver(lockPath);
       continue;
     }
     if (Date.now() > deadline) throw new Error(`the replay cache file is locked by another writer: ${lockPath}`);
     await sleep(RETRY_MS);
+  }
+}
+
+/**
+ * Removes a stale lock file. Two waiters can see the same stale file, and
+ * deleting it by path would let the slower one delete the lock the faster
+ * one has just taken, so both would hold it. Only the waiter holding a
+ * second, short-lived lock (`<lock>.takeover`) may delete it, after looking
+ * again: whoever takes that lock next sees the lock file gone or fresh.
+ */
+async function takeOver(lockPath: string): Promise<void> {
+  const guard = `${lockPath}.takeover`;
+  try {
+    await (await open(guard, 'wx', 0o600)).close();
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
+    // Held only for a stat and an unlink, so an old one was left by a waiter that died there.
+    const age = await stat(guard).then((stats) => Date.now() - stats.mtimeMs, () => undefined);
+    if (age !== undefined && age > STALE_MS) await unlink(guard).catch(() => undefined);
+    return;
+  }
+  try {
+    const current = await stat(lockPath).catch(() => undefined);
+    if (current !== undefined && Date.now() - current.mtimeMs > STALE_MS) await unlink(lockPath).catch(() => undefined);
+  } finally {
+    await unlink(guard).catch(() => undefined);
   }
 }

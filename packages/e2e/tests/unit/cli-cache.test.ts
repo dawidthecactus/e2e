@@ -210,8 +210,9 @@ describe('e2e cache clear', () => {
     writeFileSync(path.join(directory, `${'c'.repeat(64)}.json`), 'torn', 'utf8');
     writeFileSync(path.join(directory, 'a-torn.yml.0123456789abcdef.tmp'), '{}', 'utf8');
     writeFileSync(path.join(directory, '.a-torn.writing'), '', 'utf8');
+    writeFileSync(path.join(directory, '.a-torn.writing.takeover'), '', 'utf8');
     await invoke('cache', 'clear');
-    expect(written(stdoutSpy)).toContain('cleared 4 file(s)');
+    expect(written(stdoutSpy)).toContain('cleared 5 file(s)');
     expect(readdirSync(root).toSorted()).toEqual(['e2e.config.ts', 'package.json']);
   });
 

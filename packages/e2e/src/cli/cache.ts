@@ -69,10 +69,10 @@ interface CacheContents {
 const LEGACY_ENTRY_FILE = /^[a-f0-9]{64}\.json$/u;
 /**
  * A crashed writer's leftover, a store file for cleanup purposes: an atomic
- * write's temporary file, or the lock a writer holds while it rewrites a
- * test's files.
+ * write's temporary file, the lock a writer holds while it rewrites a
+ * test's files, or the one a waiter holds while it takes over a stale lock.
  */
-const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)\.[a-f0-9]{16}\.tmp$|^\.[a-z0-9-]+\.writing$/u;
+const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)\.[a-f0-9]{16}\.tmp$|^\.[a-z0-9-]+\.writing(?:\.takeover)?$/u;
 
 /** Characters of a step's instruction a row prints. */
 const STEP_CHARS = 48;

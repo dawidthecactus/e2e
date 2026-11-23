@@ -1,6 +1,7 @@
 /** The file store: one reviewable YAML file and one generated lock per test, fail-to-miss reads. */
 
 import { chmod, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -233,6 +234,33 @@ describe('FileCacheStore', () => {
     await utimes(stale, old, old);
     expect(await store.write(KEY, payload())).toBeDefined();
     expect(await readdir(directory)).not.toContain(`.${NAME}.writing`);
+  });
+
+  it('lets one of several processes at a time take over a stale lock', async () => {
+    const { directory } = await makeStore();
+    const lock = path.join(directory, '.test.writing');
+    await writeFile(lock, '', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lock, old, old);
+    // Each process creates a marker while it holds the lock; a second holder at once fails to create it.
+    const holder = `
+      import { open, unlink } from 'node:fs/promises';
+      import { withFileLock } from '@e2e-dev/core/lib/cache/file-lock';
+      const marker = ${JSON.stringify(path.join(directory, 'held'))};
+      await withFileLock(${JSON.stringify(lock)}, async () => {
+        await (await open(marker, 'wx')).close();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await unlink(marker);
+      });
+    `;
+    const codes = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        new Promise<number | null>((resolve) => {
+          spawn(process.execPath, ['--input-type=module', '-e', holder], { cwd: process.cwd(), stdio: 'ignore' }).on('exit', resolve);
+        }),
+      ),
+    );
+    expect(codes).toEqual([0, 0, 0, 0]);
   });
 
   it('says in the lock when the act it shows cannot be held to the key', async () => {
