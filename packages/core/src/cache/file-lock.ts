@@ -57,12 +57,10 @@ async function acquire(lockPath: string): Promise<void> {
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
     }
-    const age = await stat(lockPath).then((stats) => Date.now() - stats.mtimeMs, () => undefined);
-    if (age !== undefined && age > STALE_MS) {
-      await takeOver(lockPath);
-      continue;
-    }
     if (Date.now() > deadline) throw new Error(`the replay cache file is locked by another writer: ${lockPath}`);
+    const age = await stat(lockPath).then((stats) => Date.now() - stats.mtimeMs, () => undefined);
+    // A takeover that could not remove the file (another user's, say) is retried like a live lock: paced, and only until the deadline.
+    if (age !== undefined && age > STALE_MS) await takeOver(lockPath);
     await sleep(RETRY_MS);
   }
 }
