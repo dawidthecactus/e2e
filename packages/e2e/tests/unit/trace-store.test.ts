@@ -87,8 +87,9 @@ describe('FileCacheStore', () => {
       [
         '# Replay recording of one e2e test. Review it like code: each step lists what',
         '# a replay does (do) and what it checks before the step passes (expect).',
-        `# Don't edit it: ${NAME}.lock.json holds each recording's key and digest,`,
-        '# so an edited recording no longer replays. Record it again instead.',
+        "# Don't edit it: an edited recording no longer replays, and the test records",
+        '# nothing until the edit is undone. To record a step again, delete it here.',
+        `# Keys and digests: ${NAME}.lock.json`,
         '',
         'test: settings › upgrades the plan',
         'file: tests/settings.e2e.ts',

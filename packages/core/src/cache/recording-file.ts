@@ -204,8 +204,9 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
   doc.commentBefore = [
     `${RECORDING_HEADER.slice(1)} Review it like code: each step lists what`,
     ' a replay does (do) and what it checks before the step passes (expect).',
-    ` Don't edit it: ${lockName} holds each recording's key and digest,`,
-    ' so an edited recording no longer replays. Record it again instead.',
+    " Don't edit it: an edited recording no longer replays, and the test records",
+    ' nothing until the edit is undone. To record a step again, delete it here.',
+    ` Keys and digests: ${lockName}`,
   ].join('\n');
   spaceSteps(yaml, doc);
   quoteLineBreaks(yaml, doc);
