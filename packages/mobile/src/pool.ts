@@ -22,7 +22,7 @@ import {
   type EnginePrepareResult,
 } from '@e2e-dev/core/engine';
 import { bindingsVariable, decodeBindings, deviceLabel, encodeBindings, pinnedApp, type DeviceSource, type SlotBinding } from './bindings.ts';
-import { deviceHolder, isNoSession, isRunnerFailure, message, runCommand, sessionHolder } from './errors.ts';
+import { deviceHolder, isNoSession, isRunnerFailure, isShortLivedClaim, message, runCommand } from './errors.ts';
 import type { AgentDeviceClient, MobileOptions, MobilePlatform, ClientFactory } from './options.ts';
 import { asDeviceProvider, LeasedDevices, type RecordingDeviceProvider } from './provider.ts';
 
@@ -167,17 +167,19 @@ class BootedDevices implements DeviceSource {
    * also when the inventory does not show the claim yet, or shows it under
    * one of this target's own session names from another project. `siblings`
    * are the devices the run's other slots drive. With none left, the refusal
-   * is the error, with its holder, workspace and recovery advice.
+   * is the error, with its holder, workspace and recovery advice, unless it
+   * is `passing`: a short-lived command's claim, and the slot keeps its device.
    */
-  async replace(info: EnginePrepareInfo, slot: number, taken: ReadonlySet<string>, siblings: readonly SlotBinding[], refusal: Error): Promise<SlotBinding> {
+  async replace(info: EnginePrepareInfo, slot: number, taken: ReadonlySet<string>, siblings: readonly SlotBinding[], refusal: Error, passing: boolean): Promise<SlotBinding | undefined> {
     const booted = await this.inventory(info, info.signal);
     const held = this.held(booted, info, taken);
     const driven = new Set(siblings.map((binding) => binding.deviceId));
     const next = booted.find((device) => !held.includes(device) && !driven.has(device.id));
     if (next === undefined) {
+      if (passing) return undefined;
       throw new EngineError(
         'ENGINE_FAILURE',
-        `${refusal.message}; no other booted ${this.platform} device is free for worker slot ${slot}: boot another one, or name the device in the target's \`device\` option`,
+        `${refusal.message.replace(/\.$/, '')}; no other booted ${this.platform} device is free for worker slot ${slot}: boot another one`,
         { retryable: false, cause: refusal },
       );
     }
@@ -226,6 +228,8 @@ class TakenDevice extends Error {
     readonly deviceId: string,
     readonly holder: string,
     readonly refusal: Error,
+    /** Refused at the runner start or the open by a short-lived command: the slot may keep its device when none is free. */
+    readonly passing: boolean,
   ) {
     super(`device ${deviceId} is held by agent-device session "${holder}"`, { cause: refusal });
   }
@@ -333,7 +337,12 @@ export class DevicePool {
           if (!(cause instanceof TakenDevice) || found === undefined) throw cause;
           taken.add(cause.deviceId);
           info.log(`${cause.deviceId} is held by agent-device session "${cause.holder}"; trying the next free device`);
-          bindings[slot] = await found.replace(info, slot, taken, bindings.filter((_, other) => other !== slot), cause.refusal);
+          const next = await found.replace(info, slot, taken, bindings.filter((_, other) => other !== slot), cause.refusal, cause.passing);
+          if (next === undefined) {
+            info.log(`slot ${slot} keeps ${cause.deviceId}: no other booted device is free, and the worker's start finds it once the command ends`);
+            break;
+          }
+          bindings[slot] = next;
         }
       }
     }
@@ -390,8 +399,9 @@ export class DevicePool {
    * cold boot pushes the others past `launchTimeout`. Each slot warms under
    * the session its worker resumes. A device that cannot boot ends the run
    * here; an app that does not open is logged and left to the first attempt,
-   * unless another live session refused a device the pool found, which
-   * `prepare` then swaps for the next free one.
+   * unless another session refused a device the pool found, which `prepare`
+   * then swaps for the next free one, or keeps when none is free and the
+   * refusal was a short-lived command's.
    * An automation runner that is busy or wedged from an earlier run ends it
    * here too: the first attempt could only meet the same runner and fail
    * its first observation with the app blamed, and the message names the
@@ -414,8 +424,10 @@ export class DevicePool {
     this.retain(info.targetName, session, client);
     info.log(`booting ${label} (${slot + 1} of ${bindings.length})`);
     const took: string[] = [];
+    let booted = false;
     try {
       await timed(took, 'boot', () => runCommand('boot', () => client.devices.boot(bootRequest(where)), info.signal, at));
+      booted = true;
       const runnerUp = this.options.platform !== 'ios' || (await timed(took, 'iOS runner', () => prepareRunner(client, where, info, at, movable)));
       const app = pinnedApp(info.app, binding.installedApp);
       if (app === undefined || !runnerUp) return;
@@ -428,13 +440,14 @@ export class DevicePool {
       try {
         await timed(took, `open ${app}`, () => runCommand(`open ${app}`, () => client.apps.open({ app, ...where }), info.signal, at));
       } catch (cause) {
-        if (info.signal.aborted || isRunnerFailure(cause) || (movable && sessionHolder(cause) !== undefined)) throw cause;
+        if (info.signal.aborted || isRunnerFailure(cause) || (movable && deviceHolder(cause) !== undefined)) throw cause;
         info.log(`${label}: ${app} did not open (${message(cause)}); the first attempt opens it`);
       }
     } catch (cause) {
       const holder = movable ? deviceHolder(cause) : undefined;
       if (holder === undefined || binding.deviceId === undefined || !(cause instanceof Error)) throw cause;
-      throw new TakenDevice(binding.deviceId, holder, cause);
+      // A short-lived command's claim after the boot ends with that command, so the worker's start finds the device free.
+      throw new TakenDevice(binding.deviceId, holder, cause, booted && isShortLivedClaim(cause));
     } finally {
       info.log(`${label}: ${took.join(', ')}`);
     }
@@ -475,7 +488,7 @@ async function prepareRunner(client: AgentDeviceClient, where: DeviceSelection, 
     await runCommand('prepare ios-runner', () => client.command.prepare({ action: 'ios-runner', ...where }), info.signal, at);
     return true;
   } catch (cause) {
-    if (info.signal.aborted || isRunnerFailure(cause) || (movable && sessionHolder(cause) !== undefined)) throw cause;
+    if (info.signal.aborted || isRunnerFailure(cause) || (movable && deviceHolder(cause) !== undefined)) throw cause;
     info.log(`${at}: automation runner not prepared (${message(cause)}); the first attempt starts it`);
     return false;
   }

@@ -336,13 +336,16 @@ export function deviceHolder(error: unknown): string | undefined {
 }
 
 /**
- * The session holding the device, as `deviceHolder` reads it, unless the
- * holder is a short-lived command's claim, which ends with the command and so
- * holds the device for no session.
+ * True when `deviceHolder` reads a short-lived command's claim: agent-device
+ * writes `transient:<command>` only as a claim refusal's `owner.session`, and
+ * the claim ends with the command. A session of the same daemon or a
+ * workspace session is a live holder whatever its name.
  */
-export function sessionHolder(error: unknown): string | undefined {
-  const holder = deviceHolder(error);
-  return holder?.startsWith(TRANSIENT_HOLDER) === true ? undefined : holder;
+export function isShortLivedClaim(error: unknown): boolean {
+  if (deviceHolder(error) === undefined || !(error instanceof Error)) return false;
+  const { owner } = details(error.cause);
+  const session = typeof owner === 'object' && owner !== null ? (owner as { session?: unknown }).session : undefined;
+  return typeof session === 'string' && session.startsWith(TRANSIENT_HOLDER);
 }
 
 /** True for a translated `open` agent-device refused because no installed app matches the name. */

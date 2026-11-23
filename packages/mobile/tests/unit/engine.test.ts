@@ -541,10 +541,11 @@ describe('lifecycle', () => {
     await optioned.engine.finish!(finish);
   });
 
-  it('keeps a device a short-lived agent-device command refused at the runner start or the open, as before the move', async () => {
+  it('moves a device a short-lived agent-device command refused to the next free one, and keeps it when none is free', async () => {
     // agent-device 0.21.41 claims a device for the length of one command (boot, prepare, install, push) as
-    // `transient:<command>`, refused like a live owner. That claim ends with the command, so the worker's start finds
-    // the device free: the warm-up logs the refusal and leaves the runner or the app to the first attempt.
+    // `transient:<command>`, refused like a live owner. Another host's runner start holds such a claim while this one
+    // starts its own, so the slot moves when another device is free. That claim ends with the command, so with none
+    // free the slot keeps its device and the worker's start finds it free.
     const transient = (command: string): AppError =>
       new AppError('DEVICE_IN_USE', `ios device A is owned by session "transient:${command}" in workspace "/elsewhere".`, {
         reason: 'DEVICE_CLAIM_LIVE_OWNER',
@@ -570,8 +571,21 @@ describe('lifecycle', () => {
       const { env, rejected } = await settle(h.prepare(info));
       expect(rejected, `${method} refused by transient:${command}`).toBeUndefined();
       expect(env[poolVariableIn(env, 'IOS')], `${method} refused by transient:${command}`).toBe(JSON.stringify([{ deviceId: 'A' }]));
-      expect(lines.some((line) => line.includes('trying the next free device')), lines.join(' | ')).toBe(false);
+      expect(lines, lines.join(' | ')).toContain(`slot 0 keeps A: no other booted device is free, and the worker's start finds it once the command ends`);
       await expect(boot(h, 'ios', 0, env)).resolves.toBeUndefined();
+    }
+    // Another device free: the runner start or the open refused on A by another host's `transient:prepare` moves to B.
+    for (const method of ['command.prepare', 'apps.open'] as const) {
+      const h = harness({ device: undefined });
+      h.fake.respond('devices.list', () => [{ platform: 'ios', id: 'A', name: 'A', booted: true }, { platform: 'ios', id: 'B', name: 'B', booted: true }]);
+      h.fake.respond(method, (args) => {
+        if ((args as { udid?: string }).udid === 'A') throw transient('prepare');
+        return method === 'apps.open' ? { session: 's', appName: 'Settings', appBundleId: 'com.apple.Preferences', identifiers: {} } : {};
+      });
+      const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, headed: false, log: () => undefined };
+      const { env, rejected } = await settle(h.prepare(info));
+      expect(rejected, `${method} refused by transient:prepare, B free`).toBeUndefined();
+      expect(env[poolVariableIn(env, 'IOS')], `${method} refused by transient:prepare, B free`).toBe(JSON.stringify([{ deviceId: 'B' }]));
     }
     // A boot it refused still moves the slot: another free device costs nothing, and a boot failure ends the run on main.
     const busy = harness({ device: undefined });
@@ -585,6 +599,14 @@ describe('lifecycle', () => {
     const moved = await settle(busy.prepare(info));
     expect(moved.rejected, 'devices.boot refused by transient:prepare').toBeUndefined();
     expect(moved.env[poolVariableIn(moved.env, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B' }]));
+    // With no other device free, a refused boot ends the run as on main: the slot never booted, so nothing waits for it.
+    const alone = harness({ device: undefined });
+    alone.fake.respond('devices.list', () => [{ platform: 'ios', id: 'A', name: 'A', booted: true }]);
+    alone.fake.respond('devices.boot', () => {
+      throw transient('prepare');
+    });
+    const failed = await settle(alone.prepare(info));
+    expect(failed.rejected, 'devices.boot refused by transient:prepare, nothing else free').toMatch(/^boot failed: ios device A is owned by session "transient:prepare" in workspace "\/elsewhere"; no other booted ios device is free for worker slot 0: boot another one$/);
   });
 
   it('moves a discovered slot to the next free device when another session takes its device between the inventory and the warm-up', async () => {
@@ -740,6 +762,27 @@ describe('lifecycle', () => {
       });
       expect(await bound(stale.prepare(info)), reason).toBe('rejected: boot failed: ios device A is owned by session "e2e-ios-host-gone-0" in workspace "/w".');
     }
+
+    // A session of the same daemon is a live holder whatever its name: one named like a short-lived claim moves too,
+    // and with nothing else free it fails like any other holder.
+    const oddlyNamed = (id: string): AppError => new AppError('DEVICE_IN_USE', 'Device is already in use by session "transient:smoke-0".', { session: 'transient:smoke-0', deviceId: id, dispatched: 'no' });
+    const smoke = harness({ device: undefined });
+    smoke.fake.respond('devices.list', () => free);
+    smoke.fake.respond('apps.open', refuse(oddlyNamed, ['A']));
+    expect(await bound(smoke.prepare(info))).toBe(JSON.stringify([{ deviceId: 'B' }]));
+    const smokeAlone = harness({ device: undefined });
+    smokeAlone.fake.respond('devices.list', () => [device('A')]);
+    smokeAlone.fake.respond('apps.open', refuse(oddlyNamed, ['A']));
+    expect(await bound(smokeAlone.prepare(info))).toMatch(/^rejected: open Settings failed: Device is already in use by session "transient:smoke-0"; no other booted ios device is free for worker slot 0: boot another one$/);
+
+    // Two slots on the only two devices, a live session takes the first one's at the open: the other slot's device is
+    // not free for it, and the run fails with the holder rather than starting a worker on a device another session holds.
+    const pair = harness({ device: undefined });
+    pair.fake.respond('devices.list', () => [device('A'), device('B')]);
+    pair.fake.respond('apps.open', refuse(inSession, ['A']));
+    expect(await bound(pair.prepare({ ...info, slots: 2 }))).toBe(
+      'rejected: open Settings failed: Device is already in use by session "e2e-ios-host-other-0"; no other booted ios device is free for worker slot 0: boot another one',
+    );
 
     // A refusal that names a session but is not DEVICE_IN_USE (a session bound to another device) names no holder:
     // the open is logged and left to the first attempt, and the slot keeps its device.
