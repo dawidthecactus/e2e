@@ -482,11 +482,10 @@ function unreadable(file: ListedRecordingFile, keyHash: string): string | undefi
   if (parsed.status === 'invalid') return parsed.reason;
   const recording = parsed.recordings.find((candidate) => candidate.status === 'invalid' && candidate.keyHash !== keyHash);
   if (recording?.status === 'invalid') return `${file.name}${RECORDING_EXTENSION}: ${recording.reason}`;
-  // A YAML recording no lock entry claims (a write cut short, a merge resolved in one file only) goes too,
-  // unless it is this key's own recording, edited: recording the key again is how that is repaired.
-  const ownEdited = parsed.recordings.some((candidate) => candidate.status === 'invalid' && candidate.keyHash === keyHash);
-  const stray = parsed.unclaimed.slice(ownEdited ? 1 : 0);
-  return stray.length === 0 ? undefined : `${file.name}${RECORDING_EXTENSION}: ${stray[0]} has no entry in the lock file`;
+  // A YAML recording no lock entry claims (an edit, a write cut short, a merge resolved in one file only)
+  // would go too, and nothing says which step it was: a person undoes the edit or deletes the file.
+  const [stray] = parsed.unclaimed;
+  return stray === undefined ? undefined : `${file.name}${RECORDING_EXTENSION}: ${stray} has no entry in the lock file`;
 }
 
 /**

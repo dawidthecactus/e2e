@@ -516,9 +516,9 @@ describe('FileCacheStore', () => {
     expect(await store.write('c'.repeat(64), payload('ios'))).toBeUndefined();
     await expect(store.delete(KEY, step())).rejects.toThrow(/does not read/u);
     expect(await readFile(yamlPath(directory), 'utf8')).toBe(edited);
-    // Recording the step again under its own key is the repair.
-    expect(await store.write(OTHER_KEY, payload('web', { recordedFor: second }))).toBeDefined();
-    expect((await store.read(OTHER_KEY, second)).status).toBe('hit');
+    // Not even the edited step's own key rewrites it: the edited block is not known to be that step's.
+    expect(await store.write(OTHER_KEY, payload('web', { recordedFor: second }))).toBeUndefined();
+    expect(await readFile(yamlPath(directory), 'utf8')).toBe(edited);
   });
 
   // Root writes anywhere, and Windows ignores the mode: neither has a directory to refuse the lock.

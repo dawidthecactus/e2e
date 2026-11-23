@@ -346,8 +346,9 @@ steps:
   the test; deleting only the lock leaves the YAML unreadable, so delete
   both.
 - Review the YAML, but don't edit it. Each lock entry holds a digest of its
-  recording as written, so an edited recording reads as `invalid-entry`;
-  record the step again instead. Moving steps around, or merging two
+  recording as written, so an edited recording reads as `invalid-entry`
+  and the test records nothing until the edit is undone. To record a step
+  again, delete it from the YAML. Moving steps around, or merging two
   branches that each recorded a step, is fine.
 - A run rewrites the whole file when it records, so comments you add to it
   are lost.
