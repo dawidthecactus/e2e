@@ -22,6 +22,7 @@ import {
   MAX_TRACE_ACTIONS,
   MAX_TRACE_ANCHORS,
   MAX_TRACE_DESCRIPTOR_CHARS,
+  MAX_TRACE_TEST_ID_CHARS,
   MAX_TRACE_END_WAIT_MS,
   MAX_TRACE_INPUT_CHARS,
   MAX_TRACE_PARAMS_CHARS,
@@ -421,7 +422,7 @@ function readProvenance(document: unknown): TraceProvenance | undefined {
     return undefined;
   }
   const raw = document as Record<string, unknown>;
-  const testId = readBoundedText(raw['testId'], MAX_TRACE_DESCRIPTOR_CHARS);
+  const testId = readBoundedText(raw['testId'], MAX_TRACE_TEST_ID_CHARS);
   const targetId = readBoundedText(raw['targetId'], MAX_TRACE_DESCRIPTOR_CHARS);
   const instructionDigest = raw['instructionDigest'];
   if (testId === undefined || targetId === undefined) return undefined;

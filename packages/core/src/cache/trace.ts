@@ -34,6 +34,14 @@ export const MAX_TRACE_SUMMARY_CHARS = 300;
 export const MAX_TRACE_DESCRIPTOR_CHARS = 300;
 
 /**
+ * Cap on the test id an entry keeps. The id is the test file's path and its
+ * titles, percent-encoded, so a test titled in Japanese or Korean runs past
+ * the descriptor cap; the file store names and groups a test's recordings by
+ * it, and two tests must not meet in one cut.
+ */
+export const MAX_TRACE_TEST_ID_CHARS = 4_096;
+
+/**
  * Cap on verbatim replay inputs (typed text, URLs, option labels). Inputs are
  * never truncated to fit — a trimmed URL or half a typed value would replay a
  * different action than the one recorded — so an oversized input poisons the

@@ -24,6 +24,7 @@ import {
   DESCRIPTOR_FIELDS,
   MAX_TRACE_ACTIONS,
   MAX_TRACE_DESCRIPTOR_CHARS,
+  MAX_TRACE_TEST_ID_CHARS,
   MAX_TRACE_END_WAIT_MS,
   MAX_TRACE_INPUT_CHARS,
   MAX_TRACE_PARAMS_CHARS,
@@ -372,9 +373,10 @@ export function recordedProvenance(provenance: TraceProvenance, redact: (text: s
   const testId = redact(provenance.testId);
   const targetId = redact(provenance.targetId);
   const agent = provenance.agent === undefined ? undefined : redact(provenance.agent);
-  const ambiguous = [testId, targetId, agent ?? ''].some((text) => boundIsAmbiguous(text, MAX_TRACE_DESCRIPTOR_CHARS));
+  const ambiguous =
+    boundIsAmbiguous(testId, MAX_TRACE_TEST_ID_CHARS) || [targetId, agent ?? ''].some((text) => boundIsAmbiguous(text, MAX_TRACE_DESCRIPTOR_CHARS));
   return {
-    testId: bound(testId, MAX_TRACE_DESCRIPTOR_CHARS),
+    testId: bound(testId, MAX_TRACE_TEST_ID_CHARS),
     targetId: bound(targetId, MAX_TRACE_DESCRIPTOR_CHARS),
     instructionDigest: provenance.instructionDigest,
     ...(provenance.paramsDigest === undefined ? {} : { paramsDigest: provenance.paramsDigest }),

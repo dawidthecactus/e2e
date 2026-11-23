@@ -7,7 +7,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { instructionDigest, paramsDigest } from '@e2e-dev/core/lib/cache/identity';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES, recordingFileName } from '@e2e-dev/core/lib/cache/store';
-import { MAX_TRACE_DESCRIPTOR_CHARS, type ActionTrace, type TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
+import { MAX_TRACE_TEST_ID_CHARS, type ActionTrace, type TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
 import { bound } from '@e2e-dev/core/lib/internal/text';
 import { MAX_PARAMS_DEPTH, validateJsonValue } from '@e2e-dev/core/lib/internal/json-value';
 import type { JsonValue } from '@e2e-dev/core/lib/types';
@@ -188,11 +188,26 @@ describe('FileCacheStore', () => {
     expect((await store.read(KEY, step('__proto__'))).status).toBe('hit');
   });
 
+  it('keeps two tests with a long shared title apart, each step with its targets', async () => {
+    const { directory, store } = await makeStore();
+    // Titles in Japanese, percent-encoded: hundreds of characters before the two tests differ.
+    const title = '%E6%B3%A8%E6%96%87'.repeat(30);
+    const [first, second] = [`tests/order.e2e.ts::${title}::a`, `tests/order.e2e.ts::${title}::b`];
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: first }) }));
+    await store.write(OTHER_KEY, payload('ios', { recordedFor: step('ios', { testId: first }) }));
+    await store.write('c'.repeat(64), payload('web', { recordedFor: step('web', { testId: second }) }));
+    const files = (await readdir(directory)).filter((name) => name.endsWith('.yml'));
+    expect(files).toHaveLength(2);
+    const acts = await Promise.all(files.map(async (name) => (await readFile(path.join(directory, name), 'utf8')).match(/- act:/gu)?.length));
+    expect(acts).toEqual([1, 1]);
+    expect((await store.read(OTHER_KEY, step('ios', { testId: first }))).status).toBe('hit');
+  });
+
   it('names the file a test with a long id records into', async () => {
     const { directory, store } = await makeStore();
-    const longId = `tests/${'component/'.repeat(40)}pay.e2e.ts::pays`;
+    const longId = `tests/${'component/'.repeat(460)}pay.e2e.ts::pays`;
     // A recording keeps the test id cut to its bound, and the store names the file from that.
-    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: bound(longId, MAX_TRACE_DESCRIPTOR_CHARS) }) }));
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: bound(longId, MAX_TRACE_TEST_ID_CHARS) }) }));
     const written = (await readdir(directory)).find((name) => name.endsWith('.yml'));
     expect(await recordingFileName(directory, longId)).toBe(written);
   });

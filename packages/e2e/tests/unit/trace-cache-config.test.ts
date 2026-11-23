@@ -372,7 +372,7 @@ describe('settleStagedTraces', () => {
 
   it('writes the identity digest into a confirmed kept entry that cut a long test id before entries kept one', async () => {
     const store = memoryStore();
-    const long = { ...STEP, testId: `${STEP.testId}${'x'.repeat(400)}` };
+    const long = { ...STEP, testId: `${STEP.testId}${'x'.repeat(4_200)}` };
     const recordedFor = recordedProvenance(long, (text) => text);
     const { identityDigest, ...legacy } = recordedFor;
     expect(identityDigest).toMatch(/^[a-f0-9]{64}$/u);
@@ -385,7 +385,7 @@ describe('settleStagedTraces', () => {
 
   it('leaves a confirmed kept entry that already keeps the step\'s identity digest exactly as stored', async () => {
     const store = memoryStore();
-    const recordedFor = recordedProvenance({ ...STEP, testId: `${STEP.testId}${'x'.repeat(400)}` }, (text) => text);
+    const recordedFor = recordedProvenance({ ...STEP, testId: `${STEP.testId}${'x'.repeat(4_200)}` }, (text) => text);
     expect(recordedFor.identityDigest).toMatch(/^[a-f0-9]{64}$/u);
     const stored = JSON.stringify(buildTraceEntry({ ...trace('replayed flow'), recordedFor }));
     store.entries.set(KEY_A, stored);
@@ -406,7 +406,7 @@ describe('settleStagedTraces', () => {
 
   it('replaces the identity digest of a confirmed kept entry whose names redact differently now', async () => {
     const store = memoryStore();
-    const step = { ...STEP, testId: `${STEP.testId}${'x'.repeat(400)} as hunter2` };
+    const step = { ...STEP, testId: `${STEP.testId}${'x'.repeat(4_200)} as hunter2` };
     store.entries.set(KEY_A, JSON.stringify(buildTraceEntry({ ...trace('replayed flow'), recordedFor: recordedProvenance(step, (text) => text) })));
     const secrets = new SecretLedger();
     secrets.register('password', 'hunter2');
@@ -419,7 +419,7 @@ describe('settleStagedTraces', () => {
 
   it('drops the identity digest of a confirmed kept entry whose names no longer need one', async () => {
     const store = memoryStore();
-    const step = { ...STEP, testId: `${'x'.repeat(290)}hunter2` };
+    const step = { ...STEP, testId: `${'x'.repeat(4_086)}hunter2` };
     const secrets = new SecretLedger();
     secrets.register('password', 'hunter2');
     const recorded = recordedProvenance(step, secrets.redact);
@@ -476,7 +476,7 @@ describe('settleStagedTraces', () => {
 
 describe('recorded provenance', () => {
   it('takes the identity digest over the redacted names, so it never depends on a secret value', () => {
-    const long = `${STEP.testId}${'x'.repeat(400)}`;
+    const long = `${STEP.testId}${'x'.repeat(4_200)}`;
     const digestWith = (value: string) => {
       const secrets = new SecretLedger();
       secrets.register('password', value);
@@ -490,7 +490,7 @@ describe('recorded provenance', () => {
     const recorded = (value: string) => {
       const secrets = new SecretLedger();
       secrets.register('password', value);
-      return recordedProvenance({ ...STEP, testId: `${STEP.testId}${'x'.repeat(400)}`, [field]: `staging-${value}` }, secrets.redact);
+      return recordedProvenance({ ...STEP, testId: `${STEP.testId}${'x'.repeat(4_200)}`, [field]: `staging-${value}` }, secrets.redact);
     };
     expect(recorded('hunter2')[field]).not.toContain('hunter2');
     expect(recorded('hunter2').identityDigest).toMatch(/^[a-f0-9]{64}$/u);
@@ -500,8 +500,8 @@ describe('recorded provenance', () => {
   it('measures the redacted names, so a name a secret makes longer than an entry keeps gets a digest', () => {
     const secrets = new SecretLedger();
     secrets.register('password', 'hunter2');
-    // Under 300 characters as written, over 300 once `hunter2` is redacted.
-    const variant = (title: string) => recordedProvenance({ ...STEP, testId: `${'x'.repeat(280)} hunter2 ${title}` }, secrets.redact);
+    // Within the 4,096 characters an entry keeps as written, over them once `hunter2` is redacted.
+    const variant = (title: string) => recordedProvenance({ ...STEP, testId: `${'x'.repeat(4_076)} hunter2 ${title}` }, secrets.redact);
     const [first, second] = [variant('first'), variant('second')];
     expect(first.testId).toBe(second.testId);
     expect(first.identityDigest).toMatch(/^[a-f0-9]{64}$/u);

@@ -38,7 +38,7 @@ import {
   type StoredRecording,
 } from './recording-file.ts';
 import { collisionName, RECORDING_NAME, recordingName } from './recording-name.ts';
-import { MAX_TRACE_DESCRIPTOR_CHARS, MAX_TRACE_END_WAIT_MS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
+import { MAX_TRACE_END_WAIT_MS, MAX_TRACE_TEST_ID_CHARS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
 
 /** Hard wire ceiling on one stored file, on both the read and the write path. */
 export const MAX_CACHE_WIRE_BYTES = 1_048_576;
@@ -401,7 +401,7 @@ export class FileCacheStore implements CacheStore {
  * the store names the file from.
  */
 export async function recordingFileName(directory: string, testId: string): Promise<string> {
-  const recorded = bound(testId, MAX_TRACE_DESCRIPTOR_CHARS);
+  const recorded = bound(testId, MAX_TRACE_TEST_ID_CHARS);
   const base = recordingName(recorded);
   const collided = `${collisionName(base, recorded)}${RECORDING_EXTENSION}`;
   return (await stat(join(directory, collided)).then(() => true, () => false)) ? collided : `${base}${RECORDING_EXTENSION}`;
