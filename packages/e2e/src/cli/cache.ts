@@ -1,21 +1,22 @@
 /**
  * `e2e cache`: what is in the replay cache, and how to get rid of it.
  *
- * The store is a directory of digest-named files, so a committed cache is
- * unreadable without a reader: `ls` prints each entry's provenance — the test,
- * the target, the instruction digest, its age, and how many actions it would
- * replay — `stats` sizes the store, and `clear` empties it.
+ * The store keeps one reviewable YAML file per test, beside a generated
+ * lock file: `ls` prints one row per recording (its file, target, step,
+ * age, and how many actions it would replay) and names the files no run can
+ * read, `stats` sizes the store, and `clear` empties it.
  *
  * Every command works on files only. A project that configures `cache.store`
  * replaced the filesystem with its own store, and this CLI has no way to
  * enumerate it, so it says so instead of listing an empty directory.
  */
 
+import { existsSync } from 'node:fs';
 import { readdir, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
 import picocolors from 'picocolors';
-import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '@e2e-dev/core/lib/cache/store';
+import { FileCacheStore, LOCK_EXTENSION, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION, recordingStem } from '@e2e-dev/core/lib/cache/store';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig } from '../config/resolve-run.ts';
 import { errorMessage } from '@e2e-dev/core/lib/internal/errors';
@@ -38,33 +39,44 @@ interface CacheOptions {
   readonly cwd?: string;
 }
 
-/** One entry as `ls` prints it, or a file that is not a readable entry. */
+/** One recording as `ls` prints it. */
 interface CacheEntrySummary {
-  readonly keyHash: string;
-  readonly bytes: number;
+  /** The reviewed file it is in. */
+  readonly file: string;
   readonly createdAt: string;
   readonly actions: number;
   readonly truncated: boolean;
   readonly testId: string | undefined;
   readonly targetId: string | undefined;
-  readonly instructionDigest: string | undefined;
+  /** The instruction it was recorded for, else its digest's prefix. */
+  readonly step: string;
 }
 
 interface CacheContents {
   readonly directory: string;
   readonly entries: readonly CacheEntrySummary[];
-  /** Digest-named files the store could not read: a miss to the runner too. */
-  readonly unreadable: readonly { readonly name: string; readonly bytes: number }[];
+  /** The recording files' names and sizes, each file pair once. */
+  readonly files: readonly { readonly name: string; readonly bytes: number }[];
+  /** Recordings, or whole file pairs, the store could not read: a miss to the runner too. */
+  readonly unreadable: readonly { readonly file: string; readonly reason: string }[];
+  /** Entries an older e2e wrote, one digest-named `.json` file each, which no run reads. */
+  readonly legacy: readonly string[];
   /** Files in the directory that are not cache-shaped; never touched. */
   readonly foreign: readonly string[];
 }
 
-/** Store file names: the key digest, as `FileCacheStore` writes them. */
-const ENTRY_FILE = /^([a-f0-9]{64})\.json$/u;
-/** A crashed writer's leftover; a store file for cleanup purposes. */
-const TEMPORARY_FILE = /^[a-f0-9]{64}\.json\.[a-f0-9]{16}\.tmp$/u;
+/** An entry file of the store before recordings were kept per test: the key digest. */
+const LEGACY_ENTRY_FILE = /^[a-f0-9]{64}\.json$/u;
+/**
+ * A crashed writer's leftover, a store file for cleanup purposes: an atomic
+ * write's temporary file, or the lock a writer holds while it rewrites a
+ * test's files.
+ */
+const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)\.[a-f0-9]{16}\.tmp$|^\.[a-z0-9-]+\.writing$/u;
 
-/** Digest prefix printed instead of the full 64 hex characters. */
+/** Characters of a step's instruction a row prints. */
+const STEP_CHARS = 48;
+/** Digest prefix printed for a step recorded without its instruction. */
 const DIGEST_PREFIX_CHARS = 12;
 
 /**
@@ -125,10 +137,10 @@ export function registerCacheCommand(program: Command): void {
   cacheSubcommand(
     'ls',
     'list the cached traces',
-    'Print one row per cached trace: the test and target it was recorded for, the digest of its instruction, its age, and how many actions a replay would run.',
+    'Print one row per cached trace: the recording file it is in, the target it was recorded on, the instruction it was recorded for, its age, and how many actions a replay would run.',
   );
-  cacheSubcommand('clear', 'delete every cached trace', 'Delete the cache files and the directory itself; files the runner never wrote are left alone.');
-  cacheSubcommand('stats', 'print the entry count and size', 'Print the store directory, how many readable entries it holds, and how many bytes they take.');
+  cacheSubcommand('clear', 'delete every cached trace', 'Delete the recording files, entries an older e2e wrote, and the directory itself; files the runner never wrote are left alone.');
+  cacheSubcommand('stats', 'print the entry count and size', 'Print the store directory, how many tests and readable entries it holds, and how many bytes they take.');
 }
 
 /**
@@ -156,14 +168,16 @@ async function resolveCacheDirectory(options: CacheOptions): Promise<string> {
 
 /**
  * Every file in the store directory, classified. Reads go through the store
- * itself, so a file this CLI calls an entry is exactly one a run would
- * replay: an oversized or unparseable file is unreadable here and a miss
- * there. A directory that does not exist is an empty store.
+ * itself, so a recording this CLI lists is exactly one a run would replay:
+ * an oversized or unparseable file is unreadable here and a miss there. A
+ * directory that does not exist is an empty store.
  */
 async function readContents(directory: string): Promise<CacheContents> {
   const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
   const entries: CacheEntrySummary[] = [];
-  const unreadable: { name: string; bytes: number }[] = [];
+  const files: { name: string; bytes: number }[] = [];
+  const unreadable: { file: string; reason: string }[] = [];
+  const legacy: string[] = [];
   const foreign: string[] = [];
 
   let names: string[];
@@ -171,41 +185,56 @@ async function readContents(directory: string): Promise<CacheContents> {
     names = await readdir(directory);
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { directory, entries, unreadable, foreign };
+      return { directory, entries, files, unreadable, legacy, foreign };
     }
     throw cause;
   }
-
   for (const name of names.toSorted()) {
-    const keyHash = ENTRY_FILE.exec(name)?.[1];
-    if (keyHash === undefined) {
-      if (!TEMPORARY_FILE.test(name)) foreign.push(name);
-      continue;
-    }
-    const read = await store.read(keyHash);
-    if (read.status !== 'hit') {
-      unreadable.push({ name, bytes: read.status === 'invalid' ? (read.bytes ?? 0) : 0 });
-      continue;
-    }
-    const trace = read.entry.payload;
-    entries.push({
-      keyHash,
-      bytes: read.bytes,
-      createdAt: read.entry.createdAt,
-      actions: trace.actions.length,
-      truncated: trace.truncated === true,
-      testId: trace.recordedFor?.testId,
-      targetId: trace.recordedFor?.targetId,
-      instructionDigest: trace.recordedFor?.instructionDigest,
-    });
+    if (LEGACY_ENTRY_FILE.test(name)) legacy.push(name);
+    else if (recordingStem(name) === undefined && !TEMPORARY_FILE.test(name)) foreign.push(name);
   }
-  return { directory, entries, unreadable, foreign };
+
+  for (const listed of await store.list()) {
+    const file = `${listed.name}${RECORDING_EXTENSION}`;
+    files.push({ name: listed.name, bytes: listed.bytes });
+    const { parsed } = listed;
+    if (parsed.status === 'invalid') {
+      unreadable.push({ file, reason: parsed.reason });
+      continue;
+    }
+    for (const recording of parsed.recordings) {
+      if (recording.status === 'invalid') {
+        unreadable.push({ file, reason: recording.reason });
+        continue;
+      }
+      const trace = recording.entry.payload;
+      const instruction = trace.recordedFor?.instruction;
+      entries.push({
+        file,
+        createdAt: recording.entry.createdAt,
+        actions: trace.actions.length,
+        truncated: trace.truncated === true,
+        testId: trace.recordedFor?.testId,
+        targetId: trace.recordedFor?.targetId,
+        step:
+          instruction === undefined
+            ? (trace.recordedFor?.instructionDigest.slice(0, DIGEST_PREFIX_CHARS) ?? '-')
+            : oneLine(instruction),
+      });
+    }
+  }
+  return { directory, entries, files, unreadable, legacy, foreign };
+}
+
+/** An instruction on one line, cut to `STEP_CHARS`. */
+function oneLine(text: string): string {
+  const flat = text.replaceAll(/\s+/gu, ' ').trim();
+  return flat.length <= STEP_CHARS ? flat : `${flat.slice(0, STEP_CHARS - 1)}…`;
 }
 
 /**
- * Prints one row per entry, newest last within a test, so a reviewer reads a
- * committed cache test by test. Provenance an entry does not carry — one
- * recorded before entries described themselves — prints as `-`.
+ * Prints one row per recording, file by file in the order each file lists
+ * them, so a reviewer reads a committed cache test by test.
  */
 function list(contents: CacheContents): number {
   if (contents.entries.length === 0) {
@@ -214,21 +243,14 @@ function list(contents: CacheContents): number {
     return 0;
   }
   const now = Date.now();
-  const rows = contents.entries
-    .toSorted(
-      (left, right) =>
-        (left.testId ?? '').localeCompare(right.testId ?? '') ||
-        (left.targetId ?? '').localeCompare(right.targetId ?? '') ||
-        left.createdAt.localeCompare(right.createdAt),
-    )
-    .map((entry) => [
-      entry.testId ?? '-',
-      entry.targetId ?? '-',
-      entry.instructionDigest?.slice(0, DIGEST_PREFIX_CHARS) ?? '-',
-      formatAge(entry.createdAt, now),
-      `${entry.actions}${entry.truncated ? ' (truncated)' : ''}`,
-    ]);
-  const header = ['TEST', 'TARGET', 'INSTRUCTION', 'AGE', 'ACTIONS'];
+  const rows = contents.entries.map((entry) => [
+    entry.file,
+    entry.targetId ?? '-',
+    entry.step,
+    formatAge(entry.createdAt, now),
+    `${entry.actions}${entry.truncated ? ' (truncated)' : ''}`,
+  ]);
+  const header = ['FILE', 'TARGET', 'STEP', 'AGE', 'ACTIONS'];
   const widths = header.map((title, column) =>
     Math.max(visibleWidth(title), ...rows.map((row) => visibleWidth(row[column]!))),
   );
@@ -245,13 +267,15 @@ function list(contents: CacheContents): number {
 
 /** Prints the store's size: where it is, how many entries, how many bytes. */
 function stats(contents: CacheContents): number {
-  const bytes = contents.entries.reduce((total, entry) => total + entry.bytes, 0);
+  const bytes = contents.files.reduce((total, file) => total + file.bytes, 0);
   const rows: [string, string][] = [
     ['directory', contents.directory],
+    ['tests', String(contents.files.length)],
     ['entries', String(contents.entries.length)],
     ['size', formatBytes(bytes)],
   ];
   if (contents.unreadable.length > 0) rows.push(['unreadable', String(contents.unreadable.length)]);
+  if (contents.legacy.length > 0) rows.push(['legacy', String(contents.legacy.length)]);
   const width = Math.max(...rows.map(([label]) => label.length));
   for (const [label, value] of rows) {
     process.stdout.write(`${label.padEnd(width)}  ${value}\n`);
@@ -267,15 +291,19 @@ function stats(contents: CacheContents): number {
  */
 async function clear(contents: CacheContents): Promise<number> {
   const removable = [
-    ...contents.entries.map((entry) => `${entry.keyHash}.json`),
-    ...contents.unreadable.map((file) => file.name),
+    ...contents.files.flatMap((file) => [`${file.name}${RECORDING_EXTENSION}`, `${file.name}${LOCK_EXTENSION}`]),
+    ...contents.legacy,
   ];
+  let removedFiles = 0;
   for (const name of removable) {
-    await rm(path.join(contents.directory, name), { force: true });
+    const file = path.join(contents.directory, name);
+    if (!existsSync(file)) continue;
+    await rm(file, { force: true });
+    removedFiles += 1;
   }
   // Leftover temporaries are neither entries nor foreign files; they go too.
   const temporaries = await removeTemporaries(contents.directory);
-  const removed = removable.length + temporaries;
+  const removed = removedFiles + temporaries;
   if (contents.foreign.length === 0) await rmdir(contents.directory).catch(() => undefined);
   process.stdout.write(
     removed === 0
@@ -306,7 +334,12 @@ async function removeTemporaries(directory: string): Promise<number> {
 function warnAboutSkipped(contents: CacheContents): void {
   if (contents.unreadable.length > 0) {
     process.stderr.write(
-      `${contents.unreadable.length} file(s) in ${contents.directory} are not readable trace-1 entries; a run treats each as a miss\n`,
+      `${contents.unreadable.length} recording(s) in ${contents.directory} are not readable; a run treats each as a miss:\n${contents.unreadable.map((item) => `  ${item.reason}`).join('\n')}\n`,
+    );
+  }
+  if (contents.legacy.length > 0) {
+    process.stderr.write(
+      `${contents.legacy.length} file(s) in ${contents.directory} are entries an older e2e wrote, one .json file per key, which no run reads; re-record those steps, then delete the files (e2e cache clear removes them)\n`,
     );
   }
   if (contents.foreign.length > 0) {

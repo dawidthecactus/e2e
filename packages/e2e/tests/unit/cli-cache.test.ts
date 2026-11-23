@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '@e2e-dev/core/lib/cache/store';
 import { main } from '../../src/cli/index.ts';
 import type { ActionTrace, TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
+import { instructionDigest, paramsDigest } from '@e2e-dev/core/lib/cache/identity';
 
 let root: string;
 let stdoutSpy: ReturnType<typeof vi.spyOn>;
@@ -30,7 +31,20 @@ function writeDefaultConfig(): void {
   );
 }
 
-function trace(recordedFor: TraceProvenance | undefined, actions: number): ActionTrace {
+/** A step as an entry records it, with the instruction that digests to its key. */
+function step(testId: string, targetId: string, instruction = 'do the thing'): TraceProvenance {
+  return {
+    testId,
+    targetId,
+    instructionDigest: instructionDigest(instruction),
+    paramsDigest: paramsDigest(undefined),
+    callIndex: 0,
+    agent: 'default',
+    instruction,
+  };
+}
+
+function trace(recordedFor: TraceProvenance, actions: number): ActionTrace {
   return {
     actions: Array.from({ length: actions }, (_, index) => ({
       name: 'tap' as const,
@@ -38,7 +52,7 @@ function trace(recordedFor: TraceProvenance | undefined, actions: number): Actio
       target: { role: 'button', name: `Button ${index}` },
     })),
     executor: { name: 'example-agent' },
-    ...(recordedFor === undefined ? {} : { recordedFor }),
+    recordedFor,
     summary: 'step passed',
   };
 }
@@ -74,52 +88,52 @@ afterEach(() => {
 });
 
 describe('e2e cache ls', () => {
-  it('prints the provenance, age, and action count of every entry', async () => {
+  it('prints the file, target, step, age, and action count of every recording', async () => {
     await seed([
-      {
-        keyHash: 'a'.repeat(64),
-        trace: trace({ testId: 'tests/signup.e2e.ts::signs up', targetId: 'web', instructionDigest: 'd'.repeat(64) }, 3),
-      },
-      {
-        keyHash: 'b'.repeat(64),
-        trace: trace({ testId: 'tests/billing.e2e.ts::upgrades', targetId: 'safari', instructionDigest: 'e'.repeat(64) }, 1),
-      },
+      { keyHash: 'a'.repeat(64), trace: trace(step('tests/signup.e2e.ts::signs%20up', 'web', 'sign up as {name}'), 3) },
+      { keyHash: 'b'.repeat(64), trace: trace(step('tests/billing.e2e.ts::upgrades', 'safari', 'upgrade the plan'), 1) },
+      { keyHash: 'c'.repeat(64), trace: trace(step('tests/billing.e2e.ts::upgrades', 'chrome', 'upgrade the plan'), 2) },
     ]);
     await invoke('cache', 'ls');
     const lines = written(stdoutSpy).trimEnd().split('\n');
     expect(process.exitCode).toBe(0);
-    expect(lines[0]).toMatch(/^TEST +TARGET +INSTRUCTION +AGE +ACTIONS$/);
-    // Sorted by test, so billing precedes signup whatever the file order was.
-    expect(lines[1]).toMatch(/^tests\/billing\.e2e\.ts::upgrades +safari +eeeeeeeeeeee +<1m +1$/);
-    expect(lines[2]).toMatch(/^tests\/signup\.e2e\.ts::signs up +web +dddddddddddd +<1m +3$/);
+    expect(lines[0]).toMatch(/^FILE +TARGET +STEP +AGE +ACTIONS$/);
+    // File by file, each in the order its recordings were written.
+    expect(lines[1]).toMatch(/^billing-upgrades\.yml +safari +upgrade the plan +<1m +1$/);
+    expect(lines[2]).toMatch(/^billing-upgrades\.yml +chrome +upgrade the plan +<1m +2$/);
+    expect(lines[3]).toMatch(/^signup-signs-up\.yml +web +sign up as \{name\} +<1m +3$/);
   });
 
   it('marks a recording the action cap cut short', async () => {
-    await seed([{ keyHash: 'b'.repeat(64), trace: { ...trace(undefined, 2), truncated: true } }]);
+    await seed([{ keyHash: 'b'.repeat(64), trace: { ...trace(step('tests/a.e2e.ts::cut', 'web'), 2), truncated: true } }]);
     await invoke('cache', 'ls');
     expect(written(stdoutSpy).trimEnd().split('\n')[1]).toMatch(/ 2 \(truncated\)$/);
   });
 
+  it('cuts a long instruction to one short line', async () => {
+    await seed([{ keyHash: 'b'.repeat(64), trace: trace(step('tests/a.e2e.ts::long', 'web', `fill the form\nthen ${'submit '.repeat(20)}`), 1) }]);
+    await invoke('cache', 'ls');
+    const row = written(stdoutSpy).trimEnd().split('\n')[1]!;
+    expect(row).toContain('fill the form then submit submit');
+    expect(row).toContain('…');
+  });
+
   it.each([
-    { testId: 'tests/中文.e2e.ts::passes', padding: 2, asciiPadding: 5 },
-    { testId: 'tests/e\u0301.e2e.ts::passes', padding: 2, asciiPadding: 2 },
-    { testId: 'tests/👩‍💻.e2e.ts::passes', padding: 2, asciiPadding: 3 },
-  ])('aligns columns for $testId by displayed width', async ({ testId, padding, asciiPadding }) => {
-    const asciiId = 'tests/a.e2e.ts::passes';
+    { instruction: '中文を入力する', padding: 2, asciiPadding: 10 },
+    { instruction: 'type e\u0301', padding: 2, asciiPadding: 2 },
+    { instruction: 'type 👩‍💻', padding: 2, asciiPadding: 3 },
+  ])('aligns columns for $instruction by displayed width', async ({ instruction, padding, asciiPadding }) => {
+    const ascii = 'type a';
     await seed([
-      { keyHash: 'a'.repeat(64), trace: trace({ testId: asciiId, targetId: 'web', instructionDigest: 'd'.repeat(64) }, 1) },
-      { keyHash: 'b'.repeat(64), trace: trace({ testId, targetId: 'web', instructionDigest: 'e'.repeat(64) }, 1) },
+      { keyHash: 'a'.repeat(64), trace: trace(step('tests/a.e2e.ts::passes', 'web', ascii), 1) },
+      { keyHash: 'b'.repeat(64), trace: trace(step('tests/b.e2e.ts::passes', 'web', instruction), 1) },
     ]);
     await invoke('cache', 'ls');
     const lines = written(stdoutSpy).trimEnd().split('\n');
     expect(process.exitCode).toBe(0);
     expect(lines).toHaveLength(3);
-    expect(lines.find((line) => line.startsWith(asciiId))).toBe(
-      `${asciiId}${' '.repeat(asciiPadding)}web     dddddddddddd  <1m  1`,
-    );
-    expect(lines.find((line) => line.startsWith(testId))).toBe(
-      `${testId}${' '.repeat(padding)}web     eeeeeeeeeeee  <1m  1`,
-    );
+    expect(lines.find((line) => line.startsWith('a-passes'))).toBe(`a-passes.yml  web     ${ascii}${' '.repeat(asciiPadding)}<1m  1`);
+    expect(lines.find((line) => line.startsWith('b-passes'))).toBe(`b-passes.yml  web     ${instruction}${' '.repeat(padding)}<1m  1`);
   });
 
   it('reports an empty store instead of failing', async () => {
@@ -128,25 +142,37 @@ describe('e2e cache ls', () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it('counts a file the store cannot read as unreadable, not as an entry', async () => {
-    mkdirSync(path.join(root, CACHE_DIR), { recursive: true });
-    writeFileSync(path.join(root, CACHE_DIR, `${'c'.repeat(64)}.json`), '{ not json', 'utf8');
+  it('counts a file the store cannot read as unreadable, not as an entry, and says why', async () => {
+    await seed([{ keyHash: 'a'.repeat(64), trace: trace(step('tests/a.e2e.ts::torn', 'web'), 1) }]);
+    writeFileSync(path.join(root, CACHE_DIR, 'a-torn.yml'), 'steps: [ torn', 'utf8');
     await invoke('cache', 'ls');
     expect(written(stdoutSpy)).toContain('no replay cache entries in');
-    expect(written(stderrSpy)).toContain('are not readable trace-1 entries');
+    expect(written(stderrSpy)).toContain('1 recording(s)');
+    expect(written(stderrSpy)).toContain('a-torn.yml');
+  });
+
+  it('names entries an older e2e wrote, which no run reads', async () => {
+    mkdirSync(path.join(root, CACHE_DIR), { recursive: true });
+    writeFileSync(path.join(root, CACHE_DIR, `${'c'.repeat(64)}.json`), '{}', 'utf8');
+    await invoke('cache', 'ls');
+    expect(written(stdoutSpy)).toContain('no replay cache entries in');
+    expect(written(stderrSpy)).toContain('1 file(s)');
+    expect(written(stderrSpy)).toContain('which no run reads');
   });
 });
 
 describe('e2e cache stats', () => {
   it('prints the directory, the entry count, and the size', async () => {
     await seed([
-      { keyHash: 'a'.repeat(64), trace: trace(undefined, 1) },
-      { keyHash: 'b'.repeat(64), trace: trace(undefined, 1) },
+      { keyHash: 'a'.repeat(64), trace: trace(step('tests/a.e2e.ts::one', 'web'), 1) },
+      { keyHash: 'b'.repeat(64), trace: trace(step('tests/a.e2e.ts::one', 'ios'), 1) },
+      { keyHash: 'c'.repeat(64), trace: trace(step('tests/a.e2e.ts::two', 'web'), 1) },
     ]);
     await invoke('cache', 'stats');
     const output = written(stdoutSpy);
     expect(output).toContain(`directory  ${path.join(root, CACHE_DIR)}`);
-    expect(output).toContain('entries    2');
+    expect(output).toContain('tests      2');
+    expect(output).toContain('entries    3');
     expect(output).toMatch(/size {7}\d+(\.\d)? (B|KiB)/);
   });
 
@@ -165,24 +191,28 @@ describe('e2e cache stats', () => {
 });
 
 describe('e2e cache clear', () => {
-  it('deletes the entries and the directory', async () => {
+  it('deletes the recordings and the directory', async () => {
     await seed([
-      { keyHash: 'a'.repeat(64), trace: trace(undefined, 1) },
-      { keyHash: 'b'.repeat(64), trace: trace(undefined, 1) },
+      { keyHash: 'a'.repeat(64), trace: trace(step('tests/a.e2e.ts::one', 'web'), 1) },
+      { keyHash: 'b'.repeat(64), trace: trace(step('tests/a.e2e.ts::two', 'web'), 1) },
     ]);
     await invoke('cache', 'clear');
-    expect(written(stdoutSpy)).toContain('cleared 2 file(s)');
+    // Each test's YAML file and its lock.
+    expect(written(stdoutSpy)).toContain('cleared 4 file(s)');
     expect(readdirSync(root).toSorted()).toEqual(['e2e.config.ts', 'package.json']);
     expect(process.exitCode).toBe(0);
   });
 
-  it('removes an unreadable entry and a crashed writer\u2019s temporary file', async () => {
+  it('removes an unreadable recording, an older e2e\u2019s entry, and a crashed writer\u2019s leftovers', async () => {
     const directory = path.join(root, CACHE_DIR);
     mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, 'a-torn.yml'), 'torn', 'utf8');
     writeFileSync(path.join(directory, `${'c'.repeat(64)}.json`), 'torn', 'utf8');
-    writeFileSync(path.join(directory, `${'d'.repeat(64)}.json.0123456789abcdef.tmp`), '{}', 'utf8');
+    writeFileSync(path.join(directory, 'a-torn.yml.0123456789abcdef.tmp'), '{}', 'utf8');
+    writeFileSync(path.join(directory, '.a-torn.writing'), '', 'utf8');
     await invoke('cache', 'clear');
-    expect(written(stdoutSpy)).toContain('cleared 2 file(s)');
+    expect(written(stdoutSpy)).toContain('cleared 4 file(s)');
+    expect(readdirSync(root).toSorted()).toEqual(['e2e.config.ts', 'package.json']);
   });
 
   it('leaves files the runner never wrote, and says so', async () => {

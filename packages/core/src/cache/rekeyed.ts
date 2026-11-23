@@ -17,13 +17,19 @@
  */
 
 import type { ResolvedCacheConfig } from '../config/resolve.ts';
-import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from './store.ts';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION } from './store.ts';
 import type { TraceKeyContext, TraceProvenance } from './trace.ts';
+
+/** One listed entry: its key and the file it is in. */
+interface Listed {
+  readonly keyHash: string;
+  readonly file: string;
+}
 
 export class StoredRecordings {
   private readonly store: FileCacheStore;
-  /** Key hashes by `stepKey` of the step each entry was recorded for. */
-  private listing: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+  /** Key hashes and the file holding each, by `stepKey` of the step each entry was recorded for. */
+  private listing: Promise<ReadonlyMap<string, readonly Listed[]>> | undefined;
 
   constructor(store: FileCacheStore) {
     this.store = store;
@@ -39,10 +45,13 @@ export class StoredRecordings {
    * it (`settleStagedTraces`). A truncated entry never replays under any key,
    * so it is never the reason a step is stale.
    */
-  async underAnotherKey(keyHash: string, step: TraceProvenance): Promise<{ readonly keyHash: string; readonly keyedBy?: TraceKeyContext } | undefined> {
+  async underAnotherKey(
+    keyHash: string,
+    step: TraceProvenance,
+  ): Promise<{ readonly keyHash: string; readonly file: string; readonly keyedBy?: TraceKeyContext } | undefined> {
     const key = stepKey(step);
     if (key === undefined) return undefined;
-    let listing: ReadonlyMap<string, readonly string[]>;
+    let listing: ReadonlyMap<string, readonly Listed[]>;
     try {
       this.listing ??= this.list();
       listing = await this.listing;
@@ -50,25 +59,28 @@ export class StoredRecordings {
       return undefined;
     }
     for (const candidate of listing.get(key) ?? []) {
-      if (candidate === keyHash) continue;
+      if (candidate.keyHash === keyHash) continue;
       // Listed once: an entry evicted since is no evidence.
-      const read = await this.store.read(candidate).catch(() => undefined);
+      const read = await this.store.read(candidate.keyHash, step).catch(() => undefined);
       if (read?.status === 'hit') {
         const keyedBy = read.entry.payload.keyedBy;
-        return { keyHash: candidate, ...(keyedBy === undefined ? {} : { keyedBy }) };
+        return { keyHash: candidate.keyHash, file: candidate.file, ...(keyedBy === undefined ? {} : { keyedBy }) };
       }
     }
     return undefined;
   }
 
   /** Every replayable entry that records its whole step, by `stepKey`. */
-  private async list(): Promise<ReadonlyMap<string, readonly string[]>> {
-    const steps = new Map<string, string[]>();
-    for (const keyHash of await this.store.keyHashes()) {
-      const read = await this.store.read(keyHash);
-      if (read.status !== 'hit' || read.entry.payload.truncated === true) continue;
-      const key = read.entry.payload.recordedFor === undefined ? undefined : stepKey(read.entry.payload.recordedFor);
-      if (key !== undefined) steps.set(key, [...(steps.get(key) ?? []), keyHash]);
+  private async list(): Promise<ReadonlyMap<string, readonly Listed[]>> {
+    const steps = new Map<string, Listed[]>();
+    for (const file of await this.store.list()) {
+      if (file.parsed.status !== 'ok') continue;
+      for (const recording of file.parsed.recordings) {
+        if (recording.status !== 'hit' || recording.entry.payload.truncated === true) continue;
+        const recordedFor = recording.entry.payload.recordedFor;
+        const key = recordedFor === undefined ? undefined : stepKey(recordedFor);
+        if (key !== undefined) steps.set(key, [...(steps.get(key) ?? []), { keyHash: recording.keyHash, file: `${file.name}${RECORDING_EXTENSION}` }]);
+      }
     }
     return steps;
   }

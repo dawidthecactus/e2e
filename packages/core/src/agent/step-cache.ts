@@ -312,7 +312,7 @@ export class StepTraceSession {
     const why = changes.length === 0 ? "the runner, the engine, the app, or the agent's context changed after it was recorded" : `${changes.join(', ')} changed after it was recorded`;
     throw new AgentError(
       'REPLAY_STALE',
-      `the recording of this step no longer replays: the store holds it under another cache key (${previous.keyHash}.json), since ${why}, and cache.strict hands no step to the agent; ${strict.advice}`,
+      `the recording of this step no longer replays: ${previous.file} holds it under another cache key (${previous.keyHash.slice(0, 12)}), since ${why}, and cache.strict hands no step to the agent; ${strict.advice}`,
     );
   }
 
@@ -386,7 +386,7 @@ export class StepTraceSession {
   private async readEntry(): Promise<EntryRead> {
     let read: Awaited<ReturnType<AgentCacheContext['store']['read']>>;
     try {
-      read = await this.cache.store.read(this.keyHash);
+      read = await this.cache.store.read(this.keyHash, recordedProvenance(this.claim.step, this.options.redact));
     } catch {
       return { status: 'miss', reason: 'invalid-entry', unavailable: true };
     }
@@ -664,7 +664,7 @@ export class StepTraceSession {
    */
   private async evict(): Promise<void> {
     if (this.cache.store.delete === undefined) return;
-    const deleted = await this.cache.store.delete(this.keyHash).then(() => true, () => false);
+    const deleted = await this.cache.store.delete(this.keyHash, recordedProvenance(this.claim.step, this.options.redact)).then(() => true, () => false);
     if (deleted) this.cache.staged.push({ kind: 'decided', outcome: 'evicted', keyHash: this.keyHash, stepIndex: this.options.stepIndex });
   }
 

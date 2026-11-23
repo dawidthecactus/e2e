@@ -169,6 +169,19 @@ async function tempDir(prefix: string): Promise<string> {
   return directory;
 }
 
+/** The example step's recording files, both of them, as bytes and modification times. */
+async function recordingSnapshot(directory: string) {
+  const files = ['example-step.yml', 'example-step.lock.json'].map((name) => join(directory, name));
+  return Promise.all(files.map(async (file) => ({ bytes: await readFile(file, 'utf8'), mtimeMs: (await stat(file)).mtimeMs })));
+}
+
+/** The example step's entry under `keyHash`, as the store reads it back. */
+async function storedPayload(store: FileCacheStore, keyHash: string): Promise<ActionTrace> {
+  const read = await store.read(keyHash, exampleStep);
+  if (read.status !== 'hit') throw new Error(`expected a stored entry, got ${read.status}`);
+  return read.entry.payload;
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -1013,8 +1026,7 @@ describe('StepTraceSession', () => {
       claimKey: () => claimedKey('a'.repeat(64)),
       staged: [],
     });
-    const file = join(directory, `${'a'.repeat(64)}.json`);
-    const snapshot = async () => ({ bytes: await readFile(file, 'utf8'), mtimeMs: (await stat(file)).mtimeMs });
+    const snapshot = async () => recordingSnapshot(directory);
     const run = async (paths: string[], screens: (readonly SemanticNode[])[], lastVerifiedStepIndex = 5) => {
       const current = context();
       const session = recordingSession(current, paths, screens);
@@ -1031,7 +1043,7 @@ describe('StepTraceSession', () => {
     const recorded = await run(['/pricing', '/customers'], [[], [savedMarker]]);
     expect(recorded.cacheInfo?.mode).toBe('missed');
     const written = await snapshot();
-    expect(JSON.parse(written.bytes).payload.endAnchors).toEqual([savedAnchor]);
+    expect((await storedPayload(store, 'a'.repeat(64))).endAnchors).toEqual([savedAnchor]);
 
     // Two replays in a row: the file's bytes and mtime never move.
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1047,13 +1059,13 @@ describe('StepTraceSession', () => {
     const healed = await run(['/pricing', '/customers', '/customers'], [[], [], [renamed]]);
     expect(healed.replayedPrefix?.stopReason).toBe('end-mismatch');
     const rewritten = await snapshot();
-    expect(rewritten.bytes).not.toBe(written.bytes);
-    expect(JSON.parse(rewritten.bytes).payload.endAnchors).toEqual([{ ...savedAnchor, text: 'stored' }]);
+    expect(rewritten[0]!.bytes).not.toBe(written[0]!.bytes);
+    expect((await storedPayload(store, 'a'.repeat(64))).endAnchors).toEqual([{ ...savedAnchor, text: 'stored' }]);
 
     // A replay nothing verified afterwards is implicated like a recording would be: evicted.
     const unconfirmed = await run(['/pricing', '/customers'], [[], [renamed]], 0);
     expect(unconfirmed.cacheInfo?.mode).toBe('self-finalized');
-    await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(directory, 'example-step.yml'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('takes the step for the live progress on a hit, before the start-path probe, and hands it over only when the model must finish it', async () => {
@@ -1179,8 +1191,7 @@ describe('settleStagedTraces and a re-recorded flow', () => {
       claimKey: () => claimedKey('c'.repeat(64)),
       staged: [],
     });
-    const file = join(directory, `${'c'.repeat(64)}.json`);
-    const snapshot = async () => ({ bytes: await readFile(file, 'utf8'), mtimeMs: (await stat(file)).mtimeMs });
+    const snapshot = async () => recordingSnapshot(directory);
     const trace = (summary: string, endWaitMs: number, taps: number): ActionTrace => ({
       actions: Array.from({ length: taps }, (_, index) => ({
         name: 'tap' as const,
@@ -1188,6 +1199,7 @@ describe('settleStagedTraces and a re-recorded flow', () => {
         target: { role: 'button', name: 'Save' },
       })),
       executor: { name: 'scripted' },
+      recordedFor: exampleStep,
       summary,
       endWaitMs,
       startPath: '/records/1',
@@ -1202,7 +1214,7 @@ describe('settleStagedTraces and a re-recorded flow', () => {
 
     await flush({ ...trace('saved the record', 10_100, 1), recordedBy: { provider: 'test', model: 'A' } });
     const written = await snapshot();
-    expect(JSON.parse(written.bytes).payload.summary).toBe('saved the record');
+    expect((await storedPayload(store, 'c'.repeat(64))).summary).toBe('saved the record');
 
     // A live run of the same flow words its summary differently and measures
     // another end wait; the file is what a replay reads, and nothing it reads changed.
@@ -1213,20 +1225,21 @@ describe('settleStagedTraces and a re-recorded flow', () => {
     // One more tap is a different flow, and the entry follows it.
     await flush(trace('saved after a retry', 10_090, 2));
     const replaced = await snapshot();
-    expect(replaced.bytes).not.toBe(written.bytes);
-    expect(JSON.parse(replaced.bytes).payload.actions).toHaveLength(2);
+    expect(replaced[0]!.bytes).not.toBe(written[0]!.bytes);
+    expect((await storedPayload(store, 'c'.repeat(64))).actions).toHaveLength(2);
   });
 
   it('leaves an entry untouched when only the rule that flagged a typed value differs', async () => {
     const directory = await tempDir('e2e-flush-derived-');
     const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: true });
-    const file = join(directory, `${'d'.repeat(64)}.json`);
+    const file = join(directory, 'example-step.yml');
     const trace = (derived?: DerivedReason): ActionTrace => ({
       actions: [
         { name: 'tool', summary: 'tool type (run-time value)', ...(derived === undefined ? {} : { derived }) },
         { name: 'tap', summary: 'tap Apply', target: { role: 'button', name: 'Apply' } },
       ],
       executor: { name: 'scripted' },
+      recordedFor: exampleStep,
       summary: 'applied the coupon',
       startPath: '/e/iframe-form',
       endPath: '/e/iframe-form',
@@ -1259,6 +1272,7 @@ describe('settleStagedTraces and a re-recorded flow', () => {
     const trace: ActionTrace = {
       actions: [{ name: 'tap', summary: 'tap Save', target: { role: 'button', name: 'Save' } }],
       executor: { name: 'scripted' },
+      recordedFor: exampleStep,
       summary: 'saved',
       startPath: '/',
       endPath: '/',
@@ -1364,7 +1378,7 @@ describe('cache.strict and a step whose key changed under its recording', () => 
     const session = makeSession(await rekeyedContext(recordedPayload(exampleStep)), makeHost(['/']));
     const failure = session.begin();
     await expect(failure).rejects.toMatchObject({ code: 'REPLAY_STALE', category: 'configuration' });
-    await expect(failure).rejects.toThrow(`the store holds it under another cache key (${OLD_KEY}.json)`);
+    await expect(failure).rejects.toThrow(`example-step.yml holds it under another cache key (${OLD_KEY.slice(0, 12)})`);
     await expect(failure).rejects.toThrow(/; re-record it$/u);
     expect(session.cacheInfo).toMatchObject({ mode: 'missed', reason: 'no-entry' });
   });

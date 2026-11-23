@@ -281,7 +281,8 @@ describe('settleStagedTraces', () => {
     try {
       const store = new FileCacheStore({ directory, maxBytes: 1_048_576, writable: true });
       await store.write(KEY_B, trace('stale trailing flow'));
-      const entryPath = path.join(directory, `${KEY_B}.json`);
+      // The example test's id names its recording file `a.yml`.
+      const entryPath = path.join(directory, 'a.yml');
       const before = await readFile(entryPath, 'utf8');
       await chmod(directory, 0o500);
       const context = contextWith(store);
