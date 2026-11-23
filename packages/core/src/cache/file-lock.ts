@@ -58,11 +58,20 @@ async function acquire(lockPath: string): Promise<void> {
       if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
     }
     if (Date.now() > deadline) throw new Error(`the replay cache file is locked by another writer: ${lockPath}`);
-    const age = await stat(lockPath).then((stats) => Date.now() - stats.mtimeMs, () => undefined);
     // A takeover that could not remove the file (another user's, say) is retried like a live lock: paced, and only until the deadline.
-    if (age !== undefined && age > STALE_MS) await takeOver(lockPath);
+    if (await isStale(lockPath)) await takeOver(lockPath);
     await sleep(RETRY_MS);
   }
+}
+
+/**
+ * Whether the file at `path` is a lock a dead holder left: empty, as every
+ * lock this module takes is, and older than `STALE_MS`. A file with
+ * something in it is another tool's, whatever its age, and is never removed.
+ */
+async function isStale(path: string): Promise<boolean> {
+  const stats = await stat(path).catch(() => undefined);
+  return stats !== undefined && stats.size === 0 && Date.now() - stats.mtimeMs > STALE_MS;
 }
 
 /**
@@ -79,13 +88,11 @@ async function takeOver(lockPath: string): Promise<void> {
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
     // Held only for a stat and an unlink, so an old one was left by a waiter that died there.
-    const age = await stat(guard).then((stats) => Date.now() - stats.mtimeMs, () => undefined);
-    if (age !== undefined && age > STALE_MS) await unlink(guard).catch(() => undefined);
+    if (await isStale(guard)) await unlink(guard).catch(() => undefined);
     return;
   }
   try {
-    const current = await stat(lockPath).catch(() => undefined);
-    if (current !== undefined && Date.now() - current.mtimeMs > STALE_MS) await unlink(lockPath).catch(() => undefined);
+    if (await isStale(lockPath)) await unlink(lockPath).catch(() => undefined);
   } finally {
     await unlink(guard).catch(() => undefined);
   }

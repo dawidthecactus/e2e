@@ -299,6 +299,23 @@ describe('FileCacheStore', () => {
     expect(await readdir(directory)).not.toContain(`.${NAME}.writing`);
   });
 
+  it('never takes over an old file at the lock path that has something in it', async () => {
+    const { directory, store } = await makeStore();
+    const foreign = path.join(directory, `.${NAME}.writing`);
+    await writeFile(foreign, 'pid 42\n', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(foreign, old, old);
+    let settled = false;
+    const pending = store.write(KEY, payload()).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(settled).toBe(false);
+    expect(await readFile(foreign, 'utf8')).toBe('pid 42\n');
+    await rm(foreign);
+    expect(await pending).toBeDefined();
+  });
+
   it('lets one of several processes at a time take over a stale lock', async () => {
     const { directory } = await makeStore();
     const lock = path.join(directory, '.test.writing');
