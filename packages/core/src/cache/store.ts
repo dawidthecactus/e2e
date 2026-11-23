@@ -46,6 +46,14 @@ export const MAX_CACHE_WIRE_BYTES = 1_048_576;
 
 const KEY_HASH = /^[a-f0-9]{64}$/u;
 
+/** One file of a pair as read: its whole text, or its first bytes and why the rest was not read. */
+interface CappedFile {
+  readonly bytes: number;
+  readonly text?: string;
+  readonly head?: string;
+  readonly problem?: string;
+}
+
 /** The suffix a colliding test's name carries after its base name (`collisionName`). */
 const COLLISION_SUFFIX = /--[a-f0-9]{12}$/u;
 
@@ -117,8 +125,8 @@ export class FileCacheStore implements CacheStore {
   private readonly maxBytes: number;
   /** The steps read for each test, in the order they were read: where a step new to a file goes (`placeFor`). */
   private readonly readOrder = new Map<string, string[]>();
-  /** Each pair as last read, beside the identity of its files then (`load`). */
-  private readonly loaded = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
+  /** Each pair as last parsed, beside the text of its files then (`load`). */
+  private readonly loaded = new Map<string, { readonly yaml: string; readonly lock: string; readonly file: LoadedFile | undefined }>();
 
   constructor(options: FileCacheStoreOptions) {
     this.directory = options.directory;
@@ -345,23 +353,20 @@ export class FileCacheStore implements CacheStore {
    * the store wrote it is not one.
    */
   private async load(name: string): Promise<LoadedFile | undefined> {
-    // Every step of a test reads its whole pair; parse it again only when a file changed. A rewrite
-    // renames a new file into place, so its inode changes even within one mtime tick; a change of
-    // mode (a file made readable again) moves only its ctime.
-    const stamps = await Promise.all([RECORDING_EXTENSION, LOCK_EXTENSION].map((extension) =>
-      stat(this.path(name, extension)).then((stats) => `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`, () => '-'),
-    ));
-    const stamp = stamps.join(' ');
+    const yaml = await this.readCapped(this.path(name, RECORDING_EXTENSION));
+    const lock = await this.readCapped(this.path(name, LOCK_EXTENSION));
+    // Every step of a test reads its whole pair: reading is cheap, parsing is not, so a pair whose
+    // text is what was parsed last is not parsed again. Compared by text, not by a file's inode, size,
+    // and times, which a filesystem with coarse timestamps can leave the same across a quick rewrite.
     const known = this.loaded.get(name);
-    if (known?.stamp === stamp) return known.file;
-    const file = await this.readPair(name);
-    this.loaded.set(name, { stamp, file });
+    if (known !== undefined && yaml?.text === known.yaml && lock?.text === known.lock) return known.file;
+    const file = await this.readPair(name, yaml, lock);
+    if (yaml?.text !== undefined && lock?.text !== undefined) this.loaded.set(name, { yaml: yaml.text, lock: lock.text, file });
     return file;
   }
 
-  private async readPair(name: string): Promise<LoadedFile | undefined> {
-    const yaml = await this.readCapped(this.path(name, RECORDING_EXTENSION));
-    const lock = await this.readCapped(this.path(name, LOCK_EXTENSION));
+  /** One pair as `load` read its files: its name, size, ownership, and what it holds. */
+  private async readPair(name: string, yaml: CappedFile | undefined, lock: CappedFile | undefined): Promise<LoadedFile | undefined> {
     // A file that exists but cannot be opened (another account's, say) says nothing about whose it is.
     const unopened = [yaml, lock].some((file) => file !== undefined && file.head === undefined);
     const owned = writtenByStore(yaml?.head, lock?.head);
@@ -404,9 +409,7 @@ export class FileCacheStore implements CacheStore {
   }
 
   /** One file of a pair: its whole text, or its first bytes and why the rest was not read; undefined when absent. */
-  private async readCapped(
-    path: string,
-  ): Promise<{ readonly bytes: number; readonly text?: string; readonly head?: string; readonly problem?: string } | undefined> {
+  private async readCapped(path: string): Promise<CappedFile | undefined> {
     let bytes: number;
     try {
       bytes = (await stat(path)).size;
