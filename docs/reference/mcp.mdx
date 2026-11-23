@@ -269,7 +269,7 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 | Input | Does |
 | --- | --- |
 | `code` | The body of an async function. `screen`, `app`, `expect`, `credentials`, `secrets`, `console`, and the engine's fixture (`browser` or `device`) are in scope. A session attached to a held test has no engine fixture. |
-| `timeout` | Optional. How long each action or matcher on `screen` waits by default, in ms, 1 through 120000. Default `5000`. |
+| `timeout` | Optional. How long each action or matcher on `screen` waits by default, in ms, 1 through 120000. Without it: `5000`, or the config's timeout when shorter. |
 
 ```txt
 Returned: [12.5,18,24]
@@ -299,18 +299,22 @@ Test lines: 2, 1 read not listed.
 - The result lists the lines that ran. A read shows its value there when the
   code returns nothing and logs nothing. Otherwise `return` the value.
 - The lines that pass, except reads, join the [`test_lines`](#test_lines)
-  draft in the order they ran. A call that resolves with a value counts as a
-  read, unless it passes a function, such as a page script for `evaluate`,
-  which may change the page. An object a call resolves with, such as a new
-  tab, gets a `const` line that names it. A line that passes a function is
+  draft in the order they ran. A read is a call on `screen` or a locator
+  that resolves with a value. A call on `app` or the engine's fixture is
+  drafted whatever it returns, since it may act too. An object a call
+  resolves with, such as a new tab, gets a `const` line that names it. A
+  line that passes a function the server calls, such as a route handler, is
   drafted with the function's text and a comment: declare the variables it
-  uses in the test. A passing `expect(value)` leaves no line.
+  uses in the test. What the function itself calls is not drafted again. A
+  passing `expect(value)` leaves no line.
 - Each action or matcher on `screen` waits `timeout` by default. A `timeout`
-  in a line's own options replaces it. The config's
-  [`actionTimeout`](/reference/config#actiontimeout) and
-  [`assertionTimeout`](/reference/config#assertiontimeout) apply when
+  in a line's own options replaces it. Without `timeout`, each waits 5000 ms,
+  or the config's [`actionTimeout`](/reference/config#actiontimeout) or
+  [`assertionTimeout`](/reference/config#assertiontimeout) when that is
   shorter. `app` and the engine's fixture wait as they do in a test.
-- The whole call may run 5 minutes. Code that never yields, such as
+- `await import()` takes a Node built-in or a file's absolute path. A
+  relative path resolves from e2e's own install, not the project.
+- The whole call may run 5 minutes, the lines it left running included. Code that never yields, such as
   `while (true) {}`, blocks the server.
 - The result shows `<secret:name>` where a configured secret value is.
 

@@ -516,6 +516,9 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
   });
 
   it('catalogs and runs the project tools of a custom engine target, with only the verbs it declares', async () => {
+    const pathed = await invoke('open_session', { config: 'custom.config.ts', target: 'kiosk', path: '/menu' });
+    expect(pathed.isError).toBe(true);
+    expect(pathed.text).toContain('INVALID_ARGUMENT: open_session: path opens a page');
     const opened = await invoke('open_session', { config: 'custom.config.ts', target: 'kiosk' });
     expect(opened.isError, opened.text).toBe(false);
     expect(opened.text).toContain('platform kiosk, engine fake');

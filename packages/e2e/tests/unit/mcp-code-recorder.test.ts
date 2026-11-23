@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { Recorder, type Outcome } from '../../src/session-tools/code-recorder.ts';
+import { KeptFailure, Recorder, type Outcome } from '../../src/session-tools/code-recorder.ts';
 
 /** A recorder over a ledger that knows one secret, numbering names from 1. */
 function recording(count = { handles: 0 }): Recorder {
@@ -49,7 +49,7 @@ function fakeScreen(seen: unknown[] = []) {
 describe('run_code recorder', () => {
   it('spells each line as a test writes it, and tells a read from an action', async () => {
     const recorder = recording();
-    const screen = recorder.wrap(fakeScreen(), 'screen');
+    const screen = recorder.wrap(fakeScreen(), 'screen', true);
     const row = screen.getByRole('row').nth(2);
     await row.tap({ position: { x: 1, y: 2 }, modifiers: ['Shift'], skip: undefined });
     expect(await row.textContent()).toBe('text of row[2]');
@@ -65,7 +65,7 @@ describe('run_code recorder', () => {
   it('hands the real object what the code holds wrapped, and leaves the rest as it is', async () => {
     const seen: unknown[] = [];
     const recorder = recording();
-    const screen = recorder.wrap(fakeScreen(seen), 'screen');
+    const screen = recorder.wrap(fakeScreen(seen), 'screen', true);
     const secret = Object.freeze({ name: 'apiKey', [Symbol.for('brand')]: true });
     const secrets = recorder.wrap({ get: (_name: string) => secret }, 'secrets');
     await screen.getByRole('row').filter({ has: screen.getByRole('cell', 'Ada') }).fill(secrets.get('apiKey'));
@@ -109,24 +109,24 @@ describe('run_code recorder', () => {
 
   it('gives a failure to the code that waits on it, and keeps one nothing waited on', async () => {
     const caught = recording();
-    const one = caught.wrap(fakeScreen(), 'screen');
+    const one = caught.wrap(fakeScreen(), 'screen', true);
     await expect(one.getByRole('button').missing()).rejects.toMatchObject({ code: 'LOCATOR_NOT_FOUND' });
     expect(await caught.end(new AbortController().signal)).toEqual({ unawaited: 0, lost: undefined });
     expect(sources(caught.outcomes)).toEqual(["failed: await screen.getByRole('button').missing();"]);
 
     const early = recording();
-    void early.wrap(fakeScreen(), 'screen').getByRole('button').missing();
+    void early.wrap(fakeScreen(), 'screen', true).getByRole('button').missing();
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(await early.end(new AbortController().signal)).toMatchObject({ unawaited: 0, lost: { cause: { code: 'LOCATOR_NOT_FOUND' } } });
 
     const late = recording();
-    void late.wrap(fakeScreen(), 'screen').getByRole('button').missing();
+    void late.wrap(fakeScreen(), 'screen', true).getByRole('button').missing();
     expect(await late.end(new AbortController().signal)).toMatchObject({ unawaited: 1, lost: { cause: { code: 'LOCATOR_NOT_FOUND' } } });
   });
 
   it('parks code that was cut off at its next await, with nothing to catch and spin on', async () => {
     const recorder = recording();
-    const screen = recorder.wrap(fakeScreen(), 'screen');
+    const screen = recorder.wrap(fakeScreen(), 'screen', true);
     const button = screen.getByRole('button');
     await recorder.end(AbortSignal.abort());
     let tries = 0;
@@ -151,7 +151,7 @@ describe('run_code recorder', () => {
 
   it('runs what a handler the code left behind calls after the code settled, unrecorded', async () => {
     const recorder = recording();
-    const screen = recorder.wrap(fakeScreen(), 'screen');
+    const screen = recorder.wrap(fakeScreen(), 'screen', true);
     // A route handler registered in one call and fired during the next closes over this screen.
     const handler = async (): Promise<string> => screen.getByRole('status').textContent();
     await screen.getByRole('button').tap();
@@ -180,13 +180,26 @@ describe('run_code recorder', () => {
     const polled = recording();
     const page = polled.wrap({ poll: (read: () => Promise<string>) => read().then(() => undefined), text: () => Promise.resolve('text') }, 'screen');
     await page.poll(() => page.text());
-    expect(sources(polled.outcomes)).toEqual(['read: await screen.text();', 'await screen.poll(() => page.text()); // the function brings none of the variables run_code declared: declare the ones it uses']);
+    // What the function called is its own doing, written once, in its line.
+    expect(sources(polled.outcomes)).toEqual(['await screen.poll(() => page.text()); // the function brings none of the variables run_code declared: declare the ones it uses']);
   });
 
   it("writes a credential's username by its name", async () => {
     const recorder = new Recorder((text) => text, () => 1, (text) => (text === 'ada@example.com' ? "credentials.user('admin').username" : undefined));
-    await recorder.wrap(fakeScreen(), 'screen').getByRole('textbox').fill('ada@example.com');
+    await recorder.wrap(fakeScreen(), 'screen', true).getByRole('textbox').fill('ada@example.com');
     expect(sources(recorder.outcomes)).toEqual(["await screen.getByRole('textbox').fill(credentials.user('admin').username);"]);
+  });
+
+  it('counts a value as a read only from the test API, passes a class or a built-in as itself, and fails a line whose failure was kept', async () => {
+    const recorder = recording();
+    const seen: unknown[] = [];
+    const browser = recorder.wrap({ evaluate: (script: string) => Promise.resolve(script.length), expects: (sample: unknown) => Promise.resolve(void seen.push(sample)), soft: () => Promise.resolve(new KeptFailure(Object.assign(new Error('kept'), { code: 'ASSERTION_FAILED' }))) }, 'browser');
+    await browser.evaluate('document.title = "Changed"');
+    await browser.expects(String);
+    expect(await browser.soft()).toBeUndefined();
+    expect(seen).toEqual([String]);
+    expect(sources(recorder.outcomes)).toEqual(['await browser.evaluate(\'document.title = "Changed"\');', 'await browser.expects(String);', 'failed: await browser.soft();']);
+    expect(await recorder.end(new AbortController().signal)).toEqual({ unawaited: 0, lost: undefined });
   });
 
   it('stops waiting on a line the code left when the call is cancelled', async () => {
@@ -244,7 +257,7 @@ describe('run_code recorder', () => {
     const bytes = Buffer.from('body');
     const make = (): { screen: ReturnType<typeof fakeScreen>; browser: { newTab(): Promise<typeof tab>; body(): Promise<Buffer> }; recorder: Recorder } => {
       const recorder = recording(count);
-      return { recorder, screen: recorder.wrap(fakeScreen(), 'screen'), browser: recorder.wrap({ newTab: () => Promise.resolve(tab), body: () => Promise.resolve(bytes) }, 'browser') };
+      return { recorder, screen: recorder.wrap(fakeScreen(), 'screen', true), browser: recorder.wrap({ newTab: () => Promise.resolve(tab), body: () => Promise.resolve(bytes) }, 'browser') };
     };
     const first = make();
     await first.screen.getByRole('textbox').fill(SECRET);
@@ -252,14 +265,14 @@ describe('run_code recorder', () => {
     expect(await first.browser.body()).toBe(bytes);
     const second = make();
     await second.browser.newTab();
-    expect(sources(first.recorder.outcomes)).toEqual(["await screen.getByRole('textbox').fill('<secret:apiKey>');", 'const newTab1 = await browser.newTab();', 'read: await browser.body();']);
+    expect(sources(first.recorder.outcomes)).toEqual(["await screen.getByRole('textbox').fill('<secret:apiKey>');", 'const newTab1 = await browser.newTab();', 'await browser.body();']);
     expect(sources(second.recorder.outcomes)).toEqual(['const newTab2 = await browser.newTab();']);
   });
 
   it('keeps a list a line resolved with a real array, and records what the code does with each item', async () => {
     const recorder = recording();
     const row = (index: number) => ({ textContent: () => Promise.resolve(`row ${String(index)}`) });
-    const screen = recorder.wrap({ rows: { all: () => Promise.resolve([row(0), row(1)]) } }, 'screen');
+    const screen = recorder.wrap({ rows: { all: () => Promise.resolve([row(0), row(1)]) } }, 'screen', true);
     const rows = await screen.rows.all();
     expect(Array.isArray(rows)).toBe(true);
     expect(await Promise.all(rows.map((item) => item.textContent()))).toEqual(['row 0', 'row 1']);

@@ -285,6 +285,23 @@ return { added: after - before, code, items };`,
     expect(again.text).toContain("Identifier 'screen' has already been declared; screen is in scope already, so pick another name");
   });
 
+  it('drafts what a function of the code did once, a soft failure as a failure, and a fixture call whatever it returns', async () => {
+    const before = (await call('test_lines')).text.split('\n').length;
+    const result = await runCode(`await expect(async () => { await screen.getByRole('button', 'Increment').tap(); }).toPass({ timeout: 1000 });
+await expect.soft(screen.getByRole('button', 'Nowhere')).toBeVisible();
+expect('ok').toEqual(expect.any(String));
+try { await screen.getByLabel('Nope').tap(); } catch (error) { console.log(error); }
+return await browser.evaluate('document.title');`, 100);
+    expect(result.text, result.text).toMatch(/^Failed: ASSERTION_FAILED: 1 soft assertion failed/);
+    expect(result.text).toContain('LOCATOR_NOT_FOUND: locator matched no nodes');
+    expect(result.text).toMatch(/failed: await expect\.soft\(screen\.getByRole\('button', 'Nowhere'\)\)\.toBeVisible\(\);/);
+    const added = (await call('test_lines')).text.split('\n').slice(before - 2).filter((line) => line.startsWith('await '));
+    expect(added).toEqual([
+      "await expect(async () => { await screen.getByRole('button', 'Increment').tap(); }).toPass({ timeout: 1000 }); // the function brings none of the variables run_code declared: declare the ones it uses",
+      "await browser.evaluate('document.title');",
+    ]);
+  });
+
   it('gives an error to the session whose call made it, with another session running a call', async () => {
     const second = /Session (\S+) open/.exec((await invoke('open_session')).text)?.[1];
     expect(second).toBeDefined();

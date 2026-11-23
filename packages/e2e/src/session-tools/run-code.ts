@@ -26,9 +26,9 @@ import { createScreenContext } from '@e2e-dev/core/lib/run/fixtures';
 import type { StandaloneAttempt } from '@e2e-dev/core/lib/run/standalone-attempt';
 import { credentialIn, secretIn } from '@e2e-dev/core/lib/secrets';
 import type { Credentials, Secrets } from '@e2e-dev/core/lib/types';
-import { soften, SoftFailures } from '@e2e-dev/core/lib/expect/soft';
+import { SoftFailures } from '@e2e-dev/core/lib/expect/soft';
 import { expect } from '../expect/index.ts';
-import { Recorder, type Outcome } from './code-recorder.ts';
+import { KeptFailure, Recorder, type Outcome } from './code-recorder.ts';
 import { asRunCodeCall } from './code-strays.ts';
 
 /** How long one screen action or matcher may wait unless the call says otherwise, in milliseconds. */
@@ -123,11 +123,11 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
     description: [
       `Run JavaScript against the live session: the body of an async function with ${scopeNames(options)} in scope, the objects a test body gets.`,
       "await screen.getByLabel('Email').fill('ada@example.com'); await expect(screen.getByRole('status')).toHaveText('Saved');",
-      'It is ordinary JavaScript in Node, so variables, loops, conditionals, try/catch, functions, and await import() of a Node module work. Read values, compute on them, and act on what you find in one call:',
+      'It is ordinary JavaScript in Node, so variables, loops, conditionals, try/catch, functions, and await import() of a Node built-in or a file by its absolute path work. Read values, compute on them, and act on what you find in one call:',
       "const rows = screen.getByRole('listitem'); const prices = (await rows.allTextContents()).map((text) => Number(text.match(/\\$([\\d.]+)/)[1])); return { prices, sorted: prices.every((price, i) => i === 0 || prices[i - 1] <= price) };",
       'return a JSON value to get it back; console.log lines come back too. The result lists each test line the code ran, then what changed on screen.',
       ...runCodeApi(options),
-      `Actions and matchers wait like a test: on screen each waits timeout ms by default (${String(RUN_CODE_TIMEOUT_MS)}), and a timeout in a line's own options replaces it, so a loop rarely needs a sleep.`,
+      `Actions and matchers wait like a test: on screen each waits timeout ms by default, and a timeout in a line's own options replaces it, so a loop rarely needs a sleep. Without timeout each waits ${String(RUN_CODE_TIMEOUT_MS)} ms, or the config's timeout when that is shorter.`,
       'A line that fails throws the error a test gets, whose code is the runner code (LOCATOR_NOT_FOUND, ASSERTION_FAILED, ...); uncaught, it stops the code and the app stays where it is. Await each line: a failure nothing awaited fails the call.',
       "Lines that pass, except reads, join test_lines' draft in the order they ran.",
       'The result shows <secret:name> where a configured secret value is.',
@@ -140,7 +140,7 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
         .min(1)
         .max(MAX_TIMEOUT_MS)
         .optional()
-        .describe(`How long each action or matcher on screen waits by default, in milliseconds; default ${String(RUN_CODE_TIMEOUT_MS)}`),
+        .describe(`How long each action or matcher on screen waits by default, in milliseconds; ${String(RUN_CODE_TIMEOUT_MS)}, or the config's timeout when shorter, without it`),
     }).strict(),
     execute: (args: RunCodeArgs, call: ToolExecutionOptions<unknown>) => runCode(options, args, call.abortSignal, nextHandle),
     toModelOutput: ({ output }: { readonly output: RunCodeResult }) => ({ type: output.failed ? ('error-text' as const) : ('text' as const), value: output.text }),
@@ -159,7 +159,7 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   const stray: { readonly cause: unknown }[] = [];
   const soft = new SoftFailures();
   const plain = (value: unknown): unknown => redacted(value, redact, (item) => recorder.textOf(item));
-  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder, soft), console: logging(logs, plain) };
+  const scope = { ...objects(options, attempt, args.timeout, recorder, soft), console: logging(logs, plain) };
   // Aborted when the call ends the code itself, at its timeout or an error nothing caught; with the caller's cancel it is what ends the operation the code is in the middle of.
   const stop = new AbortController();
   const cut = signal === undefined ? stop.signal : AbortSignal.any([signal, stop.signal]);
@@ -170,6 +170,8 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   let value: unknown;
   let thrown: { readonly cause: unknown } | undefined;
   let end = (): void => undefined;
+  // The limit holds for the lines the code left running too, which the call waits for after the code returned.
+  const deadline = setTimeout(() => stop.abort(), PROGRAM_TIMEOUT_MS);
   try {
     const body = compile(args.code, Object.keys(scope));
     const call = asRunCodeCall(
@@ -198,11 +200,12 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   // A promise the code left rejected in its last turn is reported once that turn is over.
   await new Promise((resolve) => setImmediate(resolve));
   const { unawaited, lost } = await recorder.end(cut);
+  clearTimeout(deadline);
   end();
   const notes = unawaited === 0 ? [] : [`Note: ${String(unawaited)} call(s) on the app were not awaited when the code ended. Lines without await start together and do not run in order; await each one.`];
-  const softened = soft.close();
+  const softFailure = soft.close();
   // What the code threw first; then a failure it never waited on, which reached nothing in it.
-  const failure = thrown ?? lost ?? stray[0] ?? (softened === undefined ? undefined : { cause: softened });
+  const failure = thrown ?? lost ?? stray[0] ?? (softFailure === undefined ? undefined : { cause: softFailure });
   const ended: Ended = { value: failure === undefined ? plain(value) : undefined, error: failure === undefined ? undefined : describe(failure.cause, Object.keys(scope)), logs, notes };
   const { outcomes } = recorder;
   if (ended.error !== undefined) options.onFailed?.(ended.error.code ?? 'ERROR');
@@ -219,10 +222,12 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
 /**
  * The objects the code has in scope, each wrapped so its calls are recorded:
  * the attempt's `app` and engine fixtures, a `screen` wired like the
- * attempt's own whose lines wait at most `timeout`, and `expect`,
+ * attempt's own whose lines wait `timeout` by default, and `expect`,
  * `credentials`, and `secrets` as a test imports them.
  */
-function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: number, recorder: Recorder, soft: SoftFailures): Record<string, unknown> {
+function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: number | undefined, recorder: Recorder, soft: SoftFailures): Record<string, unknown> {
+  // The call's own timeout is the default it asked for; without one a line waits as the config says, or the tool's default when that is shorter.
+  const wait = (configured: number): number => timeout ?? Math.min(configured, RUN_CODE_TIMEOUT_MS);
   const runtime = attempt.agentRuntime;
   const { config } = runtime;
   const screen = createScreen(
@@ -231,7 +236,7 @@ function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: numb
       budget: attempt.budget,
       runId: attempt.runId,
       attemptId: attempt.attemptId,
-      config: { ...config, actionTimeout: Math.min(config.actionTimeout, timeout), assertionTimeout: Math.min(config.assertionTimeout, timeout) },
+      config: { ...config, actionTimeout: wait(config.actionTimeout), assertionTimeout: wait(config.assertionTimeout) },
       steps: runtime.steps,
       secrets: runtime.secrets,
       redaction: { redact: runtime.redact, redactCut: runtime.redactCut },
@@ -242,12 +247,42 @@ function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: numb
   const credentials: Credentials = { user: (name) => credentialIn(config, name) };
   const secrets: Secrets = { get: (name) => secretIn(config, name) };
   // A soft failure is the call's, not the attempt's: on a held test the attempt's own would fail the test once it goes on.
-  const softly = (actual: unknown, message?: string): unknown => soften(Reflect.apply(expect, undefined, [actual, message]) as object, soft);
+  const softly = (actual: unknown, message?: string): unknown => softened(Reflect.apply(expect, undefined, [actual, message]) as object, soft);
   const real: Record<string, unknown> = { screen, app: attempt.fixtures.app, expect: Object.assign((actual: unknown, message?: string): unknown => Reflect.apply(expect, undefined, [actual, message]), expect, { soft: softly }), credentials, secrets };
   for (const name of fixtureNames(options)) real[name] = Reflect.get(attempt.fixtures, name);
   return Object.fromEntries(
-    Object.entries(real).map(([name, value]) => [name, (typeof value === 'object' || typeof value === 'function') && value !== null ? recorder.wrap(value, name) : value]),
+    Object.entries(real).map(([name, value]) => [name, (typeof value === 'object' || typeof value === 'function') && value !== null ? recorder.wrap(value, name, BUILT_IN.some((own) => own === name) && name !== 'app') : value]),
   );
+}
+
+/**
+ * `expectation` with each matcher's assertion failure kept in `soft` and not
+ * thrown, as `expect.soft` does in a test. The matcher answers with the
+ * failure it kept, so its line is written down as one that failed.
+ */
+function softened<E extends object>(expectation: E, soft: SoftFailures): E {
+  return new Proxy(expectation, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key, target);
+      if (key === 'not' && typeof value === 'object' && value !== null) return softened(value, soft);
+      if (typeof value !== 'function') return value;
+      const keep = (cause: unknown): KeptFailure => {
+        const error = classifyError(cause);
+        if (error.code !== 'ASSERTION_FAILED' || !soft.keep(error)) throw cause;
+        return new KeptFailure(cause);
+      };
+      return (...args: unknown[]): unknown => {
+        let result: unknown;
+        try {
+          result = Reflect.apply(value, target, args);
+        } catch (cause) {
+          keep(cause);
+          return undefined;
+        }
+        return result instanceof Promise ? result.catch(keep) : result;
+      };
+    },
+  });
 }
 
 /** The names the code always has, which an engine's fixture of the same name does not replace. */
@@ -322,6 +357,8 @@ function describe(cause: unknown, names: readonly string[]): NonNullable<Ended['
 function redacted(value: unknown, redact: (text: string) => string, textOf: (value: unknown) => string | undefined = () => undefined, depth = 0): unknown {
   if (typeof value === 'string') return redact(value);
   if (typeof value === 'bigint') return redact(String(value));
+  // An error's message is not a property JSON writes.
+  if (value instanceof Error) return redact(isE2EError(value) ? codedMessage(value) : `${value.name}: ${value.message}`);
   // A locator or a fixture the code holds reads as the test line that names it, not as the real object's insides.
   const text = textOf(value);
   if (text !== undefined) return redact(text);

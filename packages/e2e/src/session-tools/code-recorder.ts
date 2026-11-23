@@ -61,6 +61,14 @@ interface Sent {
   failed: { readonly cause: unknown } | undefined;
 }
 
+/** What a line resolves with when its failure was kept for later, as a soft assertion's is: the line failed, and the code goes on. */
+export class KeptFailure {
+  constructor(readonly cause: unknown) {}
+}
+
+/** Set while the server runs a function of the code: what that calls is the function's doing, already written in its line. */
+const insideFunction = new AsyncLocalStorage<true>();
+
 export class Recorder {
   /** One entry per line, in the order the code made them; a line still running holds its place. */
   private readonly slots: (Outcome | undefined)[] = [];
@@ -86,13 +94,17 @@ export class Recorder {
     private readonly named: (text: string) => string | undefined = () => undefined,
   ) {}
 
+  /** The roots whose calls that give a value back only read: the test API's own. An engine's fixture may act and answer at once. */
+  private readonly reading = new Set<string>();
+
   /** What became of each line that settled, in the order the code made them. */
   get outcomes(): readonly Outcome[] {
     return this.slots.filter((slot) => slot !== undefined);
   }
 
   /** `real` as the code holds it: every call on it runs on `real` and is recorded under `text`. */
-  wrap<T extends object>(real: T, text: string): T {
+  wrap<T extends object>(real: T, text: string, reads = false): T {
+    if (reads) this.reading.add(text);
     const known = this.proxies.get(real);
     if (known !== undefined) return known as T;
     // Not `real` itself: a frozen fixture's members could not be answered with their wrappers.
@@ -180,7 +192,7 @@ export class Recorder {
     if (this.turn === 'cut') return PARKED;
     const spelled = (line: boolean): string => `${text}(${args.map((arg) => this.spell(arg, 0, line)).join(', ')})`;
     const called = spelled(false);
-    const recording = this.turn === 'running';
+    const recording = this.turn === 'running' && insideFunction.getStore() === undefined;
     // Asked before the call runs: a line the call itself makes, as a poll's read is, does not run alongside it.
     const alongside = this.pending.size > 0;
     let returned: unknown;
@@ -200,7 +212,10 @@ export class Recorder {
     const slot = this.slots.push(undefined) - 1;
     const line = new Line<unknown>((resolve, reject) => {
       returned.then((value) => {
-        resolve(this.resolved(value, slot, source, note, text, args));
+        if (value instanceof KeptFailure) {
+          this.slots[slot] = { source, error: classifyError(value.cause) };
+          resolve(undefined);
+        } else resolve(this.resolved(value, slot, source, note, text, args));
       }, reject);
     });
     const sent: Sent = { line, failed: undefined, settled: Promise.resolve() };
@@ -230,12 +245,13 @@ export class Recorder {
     if (this.functions.some((code) => !this.sentAsText.has(code) && source.includes(Function.prototype.toString.call(code)))) note = `${CALLBACK}${note}`;
     if (isData(value, 0)) {
       // A call that gives a value back only read, unless it ran a function of the code's, which may have changed the app.
-      const read = value !== undefined && !args.some((arg) => holdsFunction(arg, 0));
+      const read = value !== undefined && this.reading.has(rootOf(text)) && !args.some((arg) => holdsFunction(arg, 0));
       this.slots[slot] = { source: read ? source : `${source}${note}`, read, value };
       return value;
     }
     const member = text.slice(text.lastIndexOf('.') + 1);
     const name = `${IDENTIFIER.test(member) ? member : 'object'}${String(this.nextHandle())}`;
+    if (this.reading.has(rootOf(text))) this.reading.add(name);
     this.slots[slot] = { source: `const ${name} = ${source}${note}`, read: false, value: undefined };
     return this.given(value, name);
   }
@@ -245,7 +261,8 @@ export class Recorder {
     if ((typeof value !== 'object' && typeof value !== 'function') || value === null || depth > MAX_DEPTH) return value;
     const real = this.reals.get(value);
     if (real !== undefined) return real;
-    if (typeof value === 'function') return this.handler(value);
+    // A constructor or a built-in, such as the `String` of `expect.any(String)`, is known by its identity and has no code of the caller's to run.
+    if (typeof value === 'function') return isCallback(value) ? this.handler(value) : value;
     // Rebuilt only around something wrapped, so an object the code made, or a secret's handle, goes in as itself.
     if (Array.isArray(value)) {
       const items = value.map((item) => this.real(item, depth + 1));
@@ -268,7 +285,7 @@ export class Recorder {
     if (known !== undefined) return known;
     const inCall = AsyncLocalStorage.snapshot();
     const handler = function (this: unknown, ...args: unknown[]): unknown {
-      return inCall(() => Reflect.apply(code as (...values: unknown[]) => unknown, this, args));
+      return inCall(() => insideFunction.run(true, () => Reflect.apply(code as (...values: unknown[]) => unknown, this, args)));
     };
     // An engine sends a page script as its text, and a handler may be told apart by its arity.
     Object.defineProperties(handler, {
@@ -297,6 +314,7 @@ export class Recorder {
     if (value === null) return 'null';
     const known = this.sources.get(value);
     if (known !== undefined) return known;
+    if (typeof value === 'function' && !isCallback(value)) return String(Reflect.get(value, 'name'));
     if (typeof value === 'function') {
       this.functions.push(value);
       return Function.prototype.toString.call(value);
@@ -315,6 +333,17 @@ export class Recorder {
 function own(real: object, key: symbol): unknown {
   const value: unknown = Reflect.get(real, key, real);
   return typeof value === 'function' ? (value.bind(real) as unknown) : value;
+}
+
+/** The first name of a line's text: the object in scope it starts from. */
+function rootOf(text: string): string {
+  return /^[A-Za-z_$][\w$]*/.exec(text)?.[0] ?? '';
+}
+
+/** Whether a function is code the caller wrote to be called, and not a class or a built-in passed by name. */
+function isCallback(value: object): boolean {
+  const source = Function.prototype.toString.call(value);
+  return !source.startsWith('class') && !/\{\s*\[native code\]\s*\}$/.test(source);
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
