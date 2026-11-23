@@ -365,7 +365,7 @@ export class FileCacheStore implements CacheStore {
    * lock. Undefined when either is over the size cap.
    */
   private async save(name: string, testId: string, recordings: readonly StoredRecording[]): Promise<{ bytes: number } | undefined> {
-    const { yaml, lock } = await renderRecordingFile({ testId, recordings }, `${name}${LOCK_EXTENSION}`);
+    const { yaml, lock } = await renderRecordingFile({ testId, recordings: onePerSlot(recordings) }, `${name}${LOCK_EXTENSION}`);
     const yamlBytes = Buffer.byteLength(yaml, 'utf8');
     const lockBytes = Buffer.byteLength(lock, 'utf8');
     if (yamlBytes > this.maxBytes || lockBytes > this.maxBytes) return undefined;
@@ -460,6 +460,22 @@ function unreadable(file: ListedRecordingFile, keyHash: string): string | undefi
   if (parsed.status === 'invalid') return parsed.reason;
   const recording = parsed.recordings.find((candidate) => candidate.status === 'invalid' && candidate.keyHash !== keyHash);
   return recording?.status === 'invalid' ? `${file.name}${RECORDING_EXTENSION}: ${recording.reason}` : undefined;
+}
+
+/**
+ * The recordings with one per step and target, the newest. A write keeps
+ * that so itself; two under different keys come from a merge of branches
+ * that each recorded the step, and the YAML has room for one: rendering
+ * both would show one and bind both keys to it.
+ */
+function onePerSlot(recordings: readonly StoredRecording[]): StoredRecording[] {
+  const slot = (recording: StoredRecording) => JSON.stringify([stepIdentity(recording.trace.recordedFor), recording.trace.recordedFor?.targetId]);
+  const newest = new Map<string, StoredRecording>();
+  for (const recording of recordings) {
+    const kept = newest.get(slot(recording));
+    if (kept === undefined || recording.createdAt > kept.createdAt) newest.set(slot(recording), recording);
+  }
+  return recordings.filter((recording) => newest.get(slot(recording)) === recording);
 }
 
 /** A pair's readable recordings, the ones a rewrite keeps. */

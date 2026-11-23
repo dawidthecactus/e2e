@@ -171,6 +171,25 @@ describe('FileCacheStore', () => {
     expect((await store.read(OTHER_KEY, step('web', { callIndex: 1 }))).status).toBe('hit');
   });
 
+  it('keeps the newer of two recordings a merge left for one step and target, and binds neither key to the other', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload('web', { startPath: '/a', endPath: '/a' }));
+    const [firstYaml, firstLock] = [await readFile(yamlPath(directory), 'utf8'), JSON.parse(await readFile(lockPath(directory), 'utf8'))];
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.write(OTHER_KEY, payload('web', { startPath: '/b', endPath: '/b' }));
+    const [secondYaml, secondLock] = [await readFile(yamlPath(directory), 'utf8'), JSON.parse(await readFile(lockPath(directory), 'utf8'))];
+    // Two branches each recorded the step under their own key, and git kept both.
+    await writeFile(yamlPath(directory), `${firstYaml}\n${secondYaml.slice(secondYaml.indexOf('  - act:'))}`, 'utf8');
+    await writeFile(lockPath(directory), JSON.stringify({ ...firstLock, entries: [...firstLock.entries, ...secondLock.entries] }), 'utf8');
+    expect((await store.read(KEY, step())).status).toBe('hit');
+    // An unrelated step records, rewriting the file.
+    const other = step('web', { instruction: 'open the cart', instructionDigest: instructionDigest('open the cart') });
+    expect(await store.write('c'.repeat(64), payload('web', { recordedFor: other }))).toBeDefined();
+    expect((await store.read(KEY, step())).status).toBe('miss');
+    const kept = await store.read(OTHER_KEY, step());
+    expect(kept.status === 'hit' && kept.entry.payload.startPath).toBe('/b');
+  });
+
   it('tells two alike runs of one act apart, so deleting one leaves the other', async () => {
     const { directory, store } = await makeStore();
     const [first, second] = [step(), step('web', { callIndex: 1 })];
