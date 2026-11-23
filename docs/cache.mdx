@@ -418,9 +418,10 @@ GitHub diffs, add this line to `.gitattributes`:
 **/.e2e/cache/*.lock.json linguist-generated=true
 ```
 
-The reader checks each recording against its lock entry's digest, and
-refuses tags, anchors, and unknown keys. An edited recording, or one moved
-under another step, reads as `invalid-entry`.
+The reader checks each recording against its lock entry's digest, and each
+step's `act` and `params` against its key, and refuses tags, anchors, and
+unknown keys. An edited recording, or one moved under another step's key in
+either file, reads as `invalid-entry`.
 
 Local runs leave a committed directory clean unless something changed. A
 replayed step never rewrites its entry, and a live recording with the same

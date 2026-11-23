@@ -301,6 +301,21 @@ describe('FileCacheStore', () => {
     expect((await store.read(KEY, step())).status).toBe('hit');
   });
 
+  it('does not replay another step\'s recording under a key a lock edit pointed at it', async () => {
+    const { directory, store } = await makeStore();
+    const named = (instruction: string) => step('web', { instruction, instructionDigest: instructionDigest(instruction) });
+    const [first, second] = [named('open the settings'), named('save the draft')];
+    await store.write(KEY, payload('web', { recordedFor: first }));
+    await store.write(OTHER_KEY, payload('web', { recordedFor: second, startPath: '/draft', endPath: '/draft' }));
+    // A hand-resolved merge conflict in the lock, say: the second key's line now names the first step's recording.
+    const lock = JSON.parse(await readFile(lockPath(directory), 'utf8'));
+    lock.entries[1].digest = lock.entries[0].digest;
+    await writeFile(lockPath(directory), JSON.stringify(lock), 'utf8');
+    const read = await store.read(OTHER_KEY, second);
+    expect(read.status === 'invalid' && read.reason).toMatch(/its act is not the instruction its key was recorded for/u);
+    expect((await store.read(KEY, first)).status).toBe('hit');
+  });
+
   it('finds each recording wherever its step moves, and reads one deleted from the YAML as absent', async () => {
     const { directory, store } = await makeStore();
     const named = (instruction: string) => step('web', { instruction, instructionDigest: instructionDigest(instruction) });

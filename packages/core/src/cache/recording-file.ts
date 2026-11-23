@@ -29,6 +29,7 @@ import type { Document, Node as YamlNode } from 'yaml';
 import { summarizeRecordedAction } from '../agent/actions.ts';
 import type { JsonValue } from '../types.ts';
 import { canonicalJson, sha256Hex } from '../internal/ids.ts';
+import { instructionDigest, paramsDigest } from './identity.ts';
 import {
   DESCRIPTOR_FIELDS,
   isNodeAction,
@@ -209,7 +210,7 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
 
   // Each lock entry is held to its recording as the YAML reads back, so the digest is taken from the text itself.
   const written = (yaml.parse(text) as { steps: Record<string, unknown>[] }).steps;
-  const entries = placed.map(({ recording, step }) => lockEntry(recording, recordingDigest(written[step]!, recording.trace.recordedFor!.targetId)));
+  const entries = placed.map(({ recording, step }) => lockEntry(recording, recordingDigest(written[step]!, recording.trace.recordedFor!.targetId), groups[step]!));
   const lock = { format: RECORDING_LOCK_FORMAT, testId: file.testId, entries };
   return { yaml: text, lock: `${JSON.stringify(lock, null, 2)}\n` };
 }
@@ -247,10 +248,19 @@ function recordingDigest(step: Record<string, unknown>, targetId: string): strin
   }));
 }
 
-/** The lock's line for one recording: everything a replay keys or never reads, nothing a reviewer needs. */
-function lockEntry(recording: StoredRecording, digest: string): Record<string, unknown> {
+/**
+ * The lock's line for one recording: everything a replay keys or never
+ * reads, nothing a reviewer needs. It says when the act or params its step
+ * shows do not digest to the ones its key holds (redacted, cut, or never
+ * recorded); otherwise a reader holds them to the key, so a lock entry
+ * pointed at another step's recording does not replay it.
+ */
+function lockEntry(recording: StoredRecording, digest: string, group: StepGroup): Record<string, unknown> {
   const { trace } = recording;
   const recordedFor = trace.recordedFor!;
+  const shown = group.recordings[0]!.trace.recordedFor!;
+  const actShown = shown.instruction !== undefined && instructionDigest(shown.instruction) === recordedFor.instructionDigest;
+  const paramsShown = paramsDigest(shown.params) === recordedFor.paramsDigest;
   return {
     key: recording.keyHash,
     target: recordedFor.targetId,
@@ -261,6 +271,8 @@ function lockEntry(recording: StoredRecording, digest: string): Record<string, u
     callIndex: recordedFor.callIndex,
     agent: recordedFor.agent,
     ...(recordedFor.identityDigest === undefined ? {} : { identityDigest: recordedFor.identityDigest }),
+    ...(actShown ? {} : { actVerbatim: false }),
+    ...(paramsShown ? {} : { paramsVerbatim: false }),
     executor: trace.executor,
     ...(trace.recordedBy === undefined ? {} : { recordedBy: trace.recordedBy }),
     summary: trace.summary,
@@ -773,6 +785,14 @@ function readRecording(testId: string, entry: LockEntry, index: number, step: Re
   const lock = entry.raw;
   const where = `steps[${String(index)}] on ${entry.target}`;
   if ((step.agent ?? DEFAULT_AGENT) !== lock['agent']) return invalid(`${where} names another agent than its lock entry`);
+  // The digest holds the YAML to the lock entry; these hold the lock entry to its key's step, so a lock edited
+  // (or merged by hand) to point one key at another step's recording does not replay it.
+  if (lock['actVerbatim'] !== false && (step.act === undefined || instructionDigest(step.act) !== lock['instructionDigest'])) {
+    return invalid(`${where}: its act is not the instruction its key was recorded for`);
+  }
+  if (lock['paramsVerbatim'] !== false && paramsDigest(step.params) !== lock['paramsDigest']) {
+    return invalid(`${where}: its params are not the ones its key was recorded for`);
+  }
   const recordedFor = {
     testId,
     targetId: entry.target,
