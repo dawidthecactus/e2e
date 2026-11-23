@@ -1,9 +1,10 @@
 /**
  * Tests `browser.consoleMessages` and `browser.pageErrors` in a real browser.
  *
- * The lists cover what the active tab logged and threw since it opened,
- * across navigations. They don't include the page `app.restart()` replaced,
- * or what a persistent browser's first tab logged before the attempt.
+ * The lists have the messages and errors from the active tab since it
+ * opened, across navigations. They don't include entries from a page
+ * replaced by `app.restart()`, or from a persistent browser's first tab
+ * before the attempt.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -67,7 +68,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     rmSync(artifactsDir, { recursive: true, force: true });
   });
 
-  /** Starts an attempt of an engine with `options` and its `browser` fixture. */
+  /** Creates an engine with `options`, starts an attempt, and gets its `browser` fixture. */
   async function start(options: WebOptions = {}): Promise<void> {
     engine = web(options);
     await engine.init!({
@@ -92,7 +93,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     remote = undefined;
   });
 
-  it('returns the console messages the page logged, errors included', async () => {
+  it('returns the console messages logged on the page, errors included', async () => {
     await start();
     await browser.goto('/console');
 
@@ -113,7 +114,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     }
   });
 
-  it('returns a thrown or rejected value that is not an Error as its text, with an empty stack', async () => {
+  it('returns a thrown or rejected value that isn\'t an Error as its text, with an empty stack', async () => {
     await start();
     await browser.goto('/values');
 
@@ -123,7 +124,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     ]);
   });
 
-  it('keeps what earlier documents of the page logged and threw', async () => {
+  it('keeps the messages and errors from earlier documents in the tab', async () => {
     await start();
     await browser.goto('/console');
     await browser.goto('/errors');
@@ -135,7 +136,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     expect(await browser.pageErrors()).toHaveLength(2);
   });
 
-  it('starts empty on the page a restart opens', async () => {
+  it('starts empty on the new page after a restart', async () => {
     await start();
     await browser.goto('/console');
     await browser.goto('/errors');
@@ -147,7 +148,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     expect(await browser.pageErrors()).toEqual([]);
   });
 
-  it('leaves out what a persistent browser\'s first tab logged and threw before the attempt', async () => {
+  it('leaves out the messages and errors from a persistent browser\'s first tab before the attempt', async () => {
     remote = await launchRemoteChrome();
     const host = await chromium.connectOverCDP(remote.endpoint);
     const tab = host.contexts()[0]!.pages()[0]!;

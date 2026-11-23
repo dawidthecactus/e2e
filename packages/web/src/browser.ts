@@ -135,7 +135,7 @@ export interface WebResponse {
 
 /** A console message from the page, as returned by `browser.consoleMessages`. */
 export interface WebConsoleMessage {
-  /** The message type, as Playwright reports it (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, etc.). */
+  /** The message type, as reported by Playwright (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, etc.). */
   readonly type: ReturnType<ConsoleMessage['type']>;
   /** The message text. */
   readonly text: string;
@@ -145,7 +145,7 @@ export interface WebConsoleMessage {
 export interface WebPageError {
   /** The error message. */
   readonly message: string;
-  /** The stack trace from the browser. It's empty when the browser doesn't report one, such as for a thrown value that isn't an `Error`. */
+  /** The stack trace from the browser. It's empty when a stack isn't reported (such as for a thrown value that isn't an `Error`). */
   readonly stack: string;
 }
 
@@ -314,9 +314,9 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
-  /** Returns the console messages the active tab logged since it opened, keeping up to 200 of the latest. */
+  /** Returns the console messages logged in the active tab since it opened (up to 200 of the latest). */
   consoleMessages(): Promise<WebConsoleMessage[]>;
-  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, keeping up to 200 of the latest. */
+  /** Returns the uncaught errors and unhandled rejections in the active tab since it opened (up to 200 of the latest). */
   pageErrors(): Promise<WebPageError[]>;
   /**
    * Adds a script every document runs before the page's own, from the next

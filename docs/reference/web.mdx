@@ -525,7 +525,7 @@ The [config](/reference/config) sets each member's budget:
 
 A `{ timeout }` option overrides the budget on `goto`, `reload`, `back`,
 `forward`, `waitForResponse`, `waitForPopup`, `waitForDownload`, and `waitForDownloads`, capped
-by the test deadline (`cleanupTimeout` in `afterEach`); `0` waits until it. `url`, `title`, `evaluate`, `consoleMessages`, `pageErrors`, `addInitScript`, `route`,
+by the test deadline (`cleanupTimeout` in `afterEach`). `0` waits until it. `url`, `title`, `evaluate`, `consoleMessages`, `pageErrors`, `addInitScript`, `route`,
 `unroute`, `unrouteAll`, `cookies`, `setCookies`, `clearCookies`, `setViewport`,
 `emulateMedia`, `onDialog`, `newTab`, the `BrowserTab` methods, `keyboard.*`, and `mouse.*` take no override.
 
@@ -676,8 +676,8 @@ const title = await browser.evaluate<string>('document.title');
 
 #### `consoleMessages`
 
-Returns the console messages the active tab logged since it opened, oldest
-first. Up to 200 of the latest messages are kept.
+Returns the console messages logged in the active tab since it opened,
+oldest first. Up to 200 of the latest messages are kept.
 
 ```ts
 await app.open('/');
@@ -687,7 +687,7 @@ expect(errors).toEqual([]);
 
 ```ts
 export interface WebConsoleMessage {
-  /** The message type, as Playwright reports it (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, etc.). */
+  /** The message type, as reported by Playwright (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, etc.). */
   readonly type: ReturnType<ConsoleMessage['type']>;
   /** The message text. */
   readonly text: string;
@@ -695,12 +695,12 @@ export interface WebConsoleMessage {
 ```
 
 - Messages from the tab's frames and workers are included.
-- The list isn't cleared on navigation, so it keeps what earlier documents
-  in the tab logged.
-- After `app.restart()`, the list only has what the new page logged.
+- The list isn't cleared on navigation, so messages from earlier documents
+  in the tab stay in it.
+- After `app.restart()`, the list only has messages from the new page.
 - Each tab has a separate list. To read another tab's list, activate it.
-- A message can arrive shortly after the page logs it. To wait for one, use
-  [`expect.poll`](/reference/expect#polling-a-value).
+- A message can show up in the list shortly after it's logged. To wait for
+  one, use [`expect.poll`](/reference/expect#polling-a-value).
 
 | Throws | When |
 | --- | --- |
@@ -722,13 +722,13 @@ expect((await browser.pageErrors()).map((error) => error.message)).toEqual([]);
 export interface WebPageError {
   /** The error message. */
   readonly message: string;
-  /** The stack trace from the browser. It's empty when the browser doesn't report one, such as for a thrown value that isn't an `Error`. */
+  /** The stack trace from the browser. It's empty when a stack isn't reported (such as for a thrown value that isn't an `Error`). */
   readonly stack: string;
 }
 ```
 
-- A thrown or rejected value that isn't an `Error` is turned into text for
-  `message` (`'7'` for `throw 7`), and `stack` is empty.
+- For a thrown or rejected value that isn't an `Error`, `message` has the
+  value as text (`'7'` for `throw 7`) and `stack` is empty.
 - Frames, workers, navigation, `app.restart()`, and other tabs are handled
   the same way as in [`consoleMessages`](#consolemessages).
 
@@ -1408,9 +1408,9 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
-  /** Returns the console messages the active tab logged since it opened, keeping up to 200 of the latest. */
+  /** Returns the console messages logged in the active tab since it opened (up to 200 of the latest). */
   consoleMessages(): Promise<WebConsoleMessage[]>;
-  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, keeping up to 200 of the latest. */
+  /** Returns the uncaught errors and unhandled rejections in the active tab since it opened (up to 200 of the latest). */
   pageErrors(): Promise<WebPageError[]>;
   /** Adds a script every document runs before the page's own, from the next navigation on. */
   addInitScript(script: string | { path: string } | (() => unknown)): Promise<void>;
