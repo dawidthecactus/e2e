@@ -194,6 +194,8 @@ async function readContents(directory: string): Promise<CacheContents> {
   const legacy: string[] = [];
   const foreign: string[] = [];
 
+  // Listed first: taking each test's lock can remove a stale one a crashed writer left.
+  const listedFiles = await store.list();
   let names: string[];
   try {
     names = await readdir(directory);
@@ -203,7 +205,6 @@ async function readContents(directory: string): Promise<CacheContents> {
     }
     throw cause;
   }
-  const listedFiles = await store.list();
   // A file named like a recording is the store's only when the store lists it: one it never wrote stays foreign.
   const owned = new Set(listedFiles.flatMap((listed) => listed.files));
   for (const name of names.toSorted()) {

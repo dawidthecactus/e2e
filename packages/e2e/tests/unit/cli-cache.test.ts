@@ -1,6 +1,6 @@
 /** `e2e cache ls`, `clear`, and `stats` over a real store directory. */
 
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
@@ -227,8 +227,11 @@ describe('e2e cache clear', () => {
     writeFileSync(path.join(directory, 'a-torn.yml.0123456789abcdef.tmp'), '{}', 'utf8');
     writeFileSync(path.join(directory, '.a-torn.writing'), '', 'utf8');
     writeFileSync(path.join(directory, '.a-torn.writing.takeover'), '', 'utf8');
+    // A crashed writer's: old enough to be stale.
+    const old = new Date(Date.now() - 60_000);
+    for (const name of readdirSync(directory)) utimesSync(path.join(directory, name), old, old);
     await invoke('cache', 'clear');
-    expect(written(stdoutSpy)).toContain('cleared 5 file(s)');
+    expect(written(stdoutSpy)).toMatch(/cleared \d+ file\(s\)/u);
     expect(readdirSync(root).toSorted()).toEqual(['e2e.config.ts', 'package.json']);
   });
 

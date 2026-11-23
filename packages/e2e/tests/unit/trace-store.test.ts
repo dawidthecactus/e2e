@@ -545,6 +545,21 @@ describe('FileCacheStore', () => {
     expect((await pending).status).toBe('hit');
   });
 
+  it('lists a test only once a writer of it is done', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    const held = path.join(directory, `.${NAME}.writing`);
+    await writeFile(held, '', 'utf8');
+    let settled = false;
+    const pending = store.list().finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(settled).toBe(false);
+    await rm(held);
+    expect((await pending).map((file) => file.name)).toEqual([NAME]);
+  });
+
   it('never writes when not writable', async () => {
     const { directory, store } = await makeStore({ writable: false });
     expect(await store.write(KEY, payload())).toBeUndefined();

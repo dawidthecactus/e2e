@@ -46,6 +46,9 @@ export const MAX_CACHE_WIRE_BYTES = 1_048_576;
 
 const KEY_HASH = /^[a-f0-9]{64}$/u;
 
+/** The suffix a colliding test's name carries after its base name (`collisionName`). */
+const COLLISION_SUFFIX = /--[a-f0-9]{12}$/u;
+
 /** How much of a file over the size cap is read to tell whose it is (`writtenByStore`). */
 const HEAD_BYTES = 4_096;
 
@@ -210,7 +213,8 @@ export class FileCacheStore implements CacheStore {
     }));
     const files: ListedRecordingFile[] = [];
     for (const stem of [...stems].toSorted()) {
-      const file = await this.load(stem);
+      // Under the lock its writer takes, the test's base name, so a listing never catches a pair half-replaced.
+      const file = await this.locked(stem.replace(COLLISION_SUFFIX, ''), () => this.load(stem));
       // One the store cannot tell is its own is not listed: `e2e cache clear` must not delete it.
       if (file !== undefined && file.unconfirmed !== true) files.push(file);
     }
