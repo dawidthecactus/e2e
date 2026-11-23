@@ -44,6 +44,13 @@ export type StagedTrace = {
   readonly keyHash: string;
   /** Index of the step in the attempt's step timeline. */
   readonly stepIndex: number;
+  /**
+   * The step's provenance redacted again when the attempt settles. A secret
+   * the run learns after the step (a provider credential a later fill
+   * resolves) can be in the instruction, params, or test id the entry shows,
+   * and is masked in what is written; absent, the provenance staged stands.
+   */
+  readonly settledProvenance?: () => TraceProvenance;
 } & (
   | { readonly kind: 'write'; readonly trace: ActionTrace }
   | { readonly kind: 'keep'; readonly recordedFor: TraceProvenance }
@@ -241,16 +248,18 @@ export async function settleStagedTraces(context: AgentCacheContext, settlement:
         outcomes.set(entry.stepIndex, entry.kind === 'keep' && deleted ? 'evicted' : 'unconfirmed');
         continue;
       }
+      const settled = entry.settledProvenance?.();
       if (entry.kind === 'keep') {
         outcomes.set(entry.stepIndex, 'kept');
-        await completeProvenance(context.store, entry.keyHash, entry.recordedFor);
+        await completeProvenance(context.store, entry.keyHash, settled ?? entry.recordedFor);
         continue;
       }
-      if (await holdsSameFlow(context.store, entry.keyHash, entry.trace)) {
+      const trace = settled === undefined ? entry.trace : { ...entry.trace, recordedFor: settled };
+      if (await holdsSameFlow(context.store, entry.keyHash, trace)) {
         outcomes.set(entry.stepIndex, 'kept');
         continue;
       }
-      const written = await context.store.write(entry.keyHash, entry.trace);
+      const written = await context.store.write(entry.keyHash, trace);
       outcomes.set(entry.stepIndex, written === undefined ? 'not-written' : 'saved');
     } catch {
       // The cache is disposable; a failed flush is a slower next run only.

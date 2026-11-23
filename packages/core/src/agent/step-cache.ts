@@ -366,6 +366,7 @@ export class StepTraceSession {
             keyHash: this.keyHash,
             stepIndex: this.options.stepIndex,
             recordedFor: recordedProvenance(this.claim.step, this.options.redact),
+            settledProvenance: () => recordedProvenance(this.claim.step, this.options.redact),
           });
         } else {
           const staged = await this.stage(recorder, verdictSummary, recordedBy);
@@ -653,7 +654,13 @@ export class StepTraceSession {
     }
     const templated = templateTrace(trace, this.options.templates);
     if (templated === undefined) return 'skipped';
-    this.cache.staged.push({ kind: 'write', keyHash: this.keyHash, trace: templated, stepIndex: this.options.stepIndex });
+    this.cache.staged.push({
+      kind: 'write',
+      keyHash: this.keyHash,
+      trace: templated,
+      stepIndex: this.options.stepIndex,
+      settledProvenance: () => recordedProvenance(this.claim.step, this.options.redact),
+    });
     return 'staged';
   }
 

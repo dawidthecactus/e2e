@@ -242,6 +242,25 @@ describe('settleStagedTraces', () => {
     expect(context.staged).toHaveLength(0);
   });
 
+  it('masks a secret the run learned after the step in what it writes', async () => {
+    const store = memoryStore();
+    const secrets = new SecretLedger();
+    const step = { ...STEP, instruction: 'sign in as alice@example.com', params: { account: 'alice@example.com' } };
+    const context = contextWith(store);
+    context.staged.push({
+      kind: 'write',
+      keyHash: KEY_A,
+      trace: { ...trace('signed in'), recordedFor: recordedProvenance(step, secrets.redact) },
+      stepIndex: 1,
+      settledProvenance: () => recordedProvenance(step, secrets.redact),
+    });
+    // A later fill resolves the address from a credential provider, before the attempt settles.
+    secrets.register('account', 'alice@example.com');
+    await settleStagedTraces(context, { lastVerifiedStepIndex: 2, implicatesUnconfirmed: true });
+    expect(store.entries.get(KEY_A)).toBeDefined();
+    expect(store.entries.get(KEY_A)).not.toContain('alice@example.com');
+  });
+
   it('writes nothing when no verification step ever passed', async () => {
     const store = memoryStore();
     const context = contextWith(store);
