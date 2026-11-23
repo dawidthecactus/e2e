@@ -23,9 +23,11 @@
 
 import { engineBrand, engineFixtures } from '../internal/brands.ts';
 import type { ComputedStyleProperty, ComputedStyleValues } from './computed-style.ts';
+import type { EngineFinishInfo, EnginePrepareInfo, EnginePrepareResult } from './lifecycle.ts';
 
 export { COMPUTED_STYLE_PROPERTIES, validateComputedStyleProperties } from './computed-style.ts';
 export type { ComputedStyleProperty, ComputedStyleValues } from './computed-style.ts';
+export type { EngineFinishInfo, EnginePrepareInfo, EnginePrepareResult } from './lifecycle.ts';
 
 // Semantics the spec requires every engine and contributed fixture to
 // reproduce exactly, exported so an engine never carries its own copy: the
@@ -53,6 +55,7 @@ export { isRefusedLinkScheme, sameSite, siteOf, urlMatches } from '../internal/u
 export { obj, type WithoutUndefined } from '../internal/objects.ts';
 import type { AppPermissionState, Expectable, Locator, Screen, Secret } from '../types.ts';
 import type {
+  EngineHostIdentity,
   EngineSpiVersion,
   LocatorAction,
   LocatorActionKind,
@@ -74,6 +77,7 @@ export {
   EngineError,
   KEY_MODIFIERS,
   KEY_NAMES,
+  KNOWN_LOCATOR_ACTION_KINDS,
   LOCATOR_ACTION_KINDS,
   OBSERVED_NAME_LIMIT,
   OBSERVED_TEXT_LIMIT,
@@ -397,82 +401,6 @@ export interface EngineSession {
   reset?(context: OperationContext): Promise<void>;
 }
 
-/**
- * What `prepare` learned that the run must honour. `workers` replaces the
- * engine's declared cap for this target and run: the surfaces the engine
- * actually provisioned, `1` to `info.slots`. Declared `workers` stays the
- * static answer for engines that know it up front.
- */
-export interface EnginePrepareResult {
-  /** Lowers the target's worker cap for this run, `1` to `info.slots`. */
-  readonly workers?: number;
-  /**
-   * Variables every worker of this target is spawned with, on top of the
-   * run's environment: how a runner-side `prepare` hands what it provisioned
-   * (a device pool it discovered) to each worker's `init`. The run's own
-   * variables win on a clash.
-   */
-  readonly env?: Readonly<Record<string, string>>;
-}
-
-/**
- * Facts handed to `prepare`, once per run and target in the runner process,
- * before any worker exists.
- */
-export interface EnginePrepareInfo {
-  /** The run id. */
-  readonly runId: string;
-  /** The target being prepared. */
-  readonly targetName: string;
-  /** Directory relative paths in the config resolve against; see `EngineInitInfo.projectRoot`. */
-  readonly projectRoot: string;
-  /** The app the target declares, as `init` receives it: what a device installs or warms up here. */
-  readonly app: EngineAppInfo;
-  /**
-   * The worker slots the run will start for this target, `0` to `slots - 1`:
-   * the run's worker cap, the engine's declared `workers`, and the work units
-   * selected for the target, whichever is smallest; `0` when nothing runs on
-   * it while another target has work. A run with nothing to run prepares no
-   * target. Provision for exactly these slots (boot that many devices of a
-   * pool); `init` then finds them ready.
-   */
-  readonly slots: number;
-  /**
-   * The run's environment: what every worker is started with. A host may hand
-   * the run an environment other than the runner process's own, so anything
-   * provisioned here that a worker later looks up by environment (a browser
-   * cache location) must be resolved and spawned against this, not
-   * `process.env`.
-   */
-  readonly env: Readonly<Record<string, string | undefined>>;
-  /**
-   * Aborts on interrupt only. Provisioning has no budget: a first-run
-   * download is as long as the network makes it, and cutting it short would
-   * fail every test behind it.
-   */
-  readonly signal: AbortSignal;
-  /** Whether the run asked for a visible surface (`--headed`), as `EngineInitInfo` declares it. */
-  readonly headed: boolean;
-  /**
-   * Reports one line of progress. The runner streams it as a `notice` run
-   * event, so it reaches the reporter and every host sink instead of being
-   * written to a worker's stderr underneath the live status block.
-   */
-  readonly log: (line: string) => void;
-}
-
-/** Handed to `finish`, once per run and target after the last worker is gone, with the cleanup budget of one hook. */
-export interface EngineFinishInfo extends EngineCleanupContext {
-  /** The run id. */
-  readonly runId: string;
-  /** The target being finished. */
-  readonly targetName: string;
-  /** The run's environment, the same `prepare` saw. */
-  readonly env: Readonly<Record<string, string | undefined>>;
-  /** Reports one line of progress, streamed as a `notice` run event like `prepare`'s. */
-  readonly log: (line: string) => void;
-}
-
 /** Facts handed to `doctor`, once per target in the process `e2e doctor` runs in. */
 export interface EngineDoctorInfo {
   /** The target being checked. */
@@ -506,7 +434,7 @@ export interface EngineDoctorCheck {
 }
 
 /** Run identity and harness-resolved facts handed to `init`, once per worker before the first step. */
-export interface EngineInitInfo {
+export interface EngineInitInfo extends EngineHostIdentity {
   /** The run id. */
   readonly runId: string;
   /** The target this worker serves. */
@@ -747,7 +675,15 @@ export interface EngineSnapshot {
   readonly treeUnavailable?: true;
   /** Masked pixels, when requested and producible; omitted otherwise. */
   readonly pixels?: ObservationPixels;
-  /** Regions masked in `pixels`; the harness checks it covers every secure node. */
+  /**
+   * Regions masked in the screenshot; the harness checks it covers every secure
+   * node. An engine asked for pixels (`pixels: true`) that cannot mask every
+   * secure node on screen omits `pixels` and still reports the regions it
+   * could mask. A count with no `pixels` always reads as withheld, even when
+   * the tree holds no secure node, since a tree read only in part can leave
+   * one out: `toHaveScreenshot` fails with `POLICY_DENIED` and the agent reads
+   * `MASKING_UNPROVEN`, not a missing screenshot.
+   */
   readonly maskedRegionCount?: number;
 }
 
@@ -860,6 +796,13 @@ export interface Engine {
    * that predates the field never drops one silently.
    */
   readonly tapModifiers?: boolean;
+  /**
+   * `prepare` binds the target to the device `EnginePrepareInfo.device`
+   * names, for `e2e run --device`, over the device the engine was configured
+   * with. Without it the runner refuses the flag for the target before
+   * anything is prepared.
+   */
+  readonly selectsDevice?: boolean;
   /** capability: keyboard - requires observation. Input to whatever holds focus; see `EngineKeyboard`. */
   readonly keyboard?: EngineKeyboard;
   /**
@@ -868,6 +811,11 @@ export interface Engine {
    * capability names; `requires: ['<name>']` gates at selection.
    */
   readonly fixtures?: Readonly<Record<string, EngineFixtureFactory>>;
+  /**
+   * How long the state behind this engine's `fixtures`, `app`, and `screen`
+   * lives; see `EngineIsolation`. Defaults to `attempt`.
+   */
+  readonly isolation?: EngineIsolation;
   /** capability: state - opaque snapshot capture/restore for session reuse. */
   readonly state?: EngineStateCapability;
   /** capability: artifacts - screenshots under the attempt directory, and videos there or at a provider. */
@@ -888,7 +836,7 @@ export interface Engine {
    * machine here (a first-run browser download, a toolchain fetch), so it
    * happens once instead of per worker and its progress reaches the reporter
    * through `info.log`. It runs after collection and before the run's clock
-   * starts: `plan` is emitted, the report's `startedAt` taken, and the app
+   * starts: `collected` is emitted, the report's `startedAt` taken, and the app
    * started only once every target is prepared, so a download is never part
    * of a run's duration. A run with nothing to run (the test filters left
    * nothing, or `--pass-with-no-tests` on an empty selection) prepares no
@@ -950,6 +898,17 @@ export interface Engine {
    */
   dispose?(context: EngineDisposeContext): Promise<void>;
 }
+
+/**
+ * What one attempt on an engine leaves for the next. `attempt`: nothing,
+ * `startAttempt` gives each attempt a fresh surface (a browser context), so
+ * the engine's fixtures, `app`, and `screen` are test fixtures, and a suite
+ * hook cannot use them. `worker`: what an attempt does stays (a device keeps
+ * permissions, keychain, and installed apps), so they are worker fixtures,
+ * which `beforeAll`, `afterAll`, and worker-scoped `test.extend()` fixtures
+ * see; a suite hook runs in a short attempt of its own for them.
+ */
+export type EngineIsolation = 'attempt' | 'worker';
 
 /**
  * A validated engine: branded, frozen, capabilities computed. `Fixtures` names

@@ -92,7 +92,9 @@
           "selectOption",
           "setInputFiles",
           "dragTo",
-          "swipe"
+          "swipe",
+          "blur",
+          "setInputFilePayloads"
         ]
       }
     },
@@ -115,6 +117,14 @@
     },
     "tapModifiers": {
       "type": "boolean"
+    },
+    "selectsDevice": {
+      "description": "prepare binds the device e2e run --device names.",
+      "type": "boolean"
+    },
+    "isolation": {
+      "description": "What one attempt leaves for the next: present only as worker, when the engine's fixtures, app, and screen outlive an attempt.",
+      "const": "worker"
     }
   },
   "allOf": [
@@ -386,6 +396,27 @@
           "methods": {
             "contains": {
               "const": "artifacts/screenshot"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "selectsDevice": {
+            "const": true
+          }
+        },
+        "required": [
+          "selectsDevice"
+        ]
+      },
+      "then": {
+        "properties": {
+          "methods": {
+            "contains": {
+              "const": "lifecycle/prepare"
             }
           }
         }

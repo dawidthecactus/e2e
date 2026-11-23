@@ -27,6 +27,7 @@ import type {
   TextMatch,
   TextMatcherOptions,
 } from '@e2e-dev/core/lib/types';
+import { labelAmbiguous, withMessage } from './heading.ts';
 import { expectScreenshot } from './screenshot.ts';
 
 interface Sample {
@@ -143,10 +144,12 @@ class AsyncExpectationImpl implements AsyncExpectation {
   constructor(
     private readonly internals: LocatorInternals,
     private readonly negated: boolean,
+    /** The caller's label for this check, opening every failure message. */
+    private readonly message: string | undefined,
   ) {}
 
   get not(): AsyncExpectation {
-    return new AsyncExpectationImpl(this.internals, !this.negated);
+    return new AsyncExpectationImpl(this.internals, !this.negated, this.message);
   }
 
   private get label(): string {
@@ -186,7 +189,9 @@ class AsyncExpectationImpl implements AsyncExpectation {
           signal: engine.signal,
           negated: this.negated,
           evaluate: async (reads) => {
-            const sample = await this.sample(spec, reads);
+            const sample = await this.sample(spec, reads).catch((error: unknown) => {
+              throw labelAmbiguous(error, this.message);
+            });
             lastSample = sample;
             if (spec.readsWithheld === true) {
               denySecureRead(sample.node === null ? sample.nodes : [sample.node], this.label);
@@ -201,7 +206,7 @@ class AsyncExpectationImpl implements AsyncExpectation {
             return new TestError(
               'ASSERTION_FAILED',
               [
-                `${api} failed`,
+                withMessage(this.message, `${api} failed`),
                 `locator: ${this.label}`,
                 `expected: ${expected}`,
                 `observed: ${observed} (match count ${lastSample.count})`,
@@ -381,6 +386,25 @@ class AsyncExpectationImpl implements AsyncExpectation {
     return this.stateMatcher('toBeDisabled', options);
   }
 
+  toBeEditable(options?: { editable?: boolean; timeout?: number }): Promise<void> {
+    const holds = this.readOptions('toBeEditable', options, 'editable') ?? true;
+    return this.poll(
+      {
+        name: 'toBeEditable',
+        evaluableNode: (node) => editState(node) !== undefined,
+        predicate: (sample) => sample.node !== null && (editState(sample.node) === 'editable') === holds,
+        describeExpected: holds ? 'editable' : 'read-only or disabled',
+        observed: (sample) => {
+          if (sample.node === null) return 'no node';
+          const { node } = sample;
+          const role = node.role === undefined ? 'no role' : `role ${JSON.stringify(node.role)}`;
+          return editState(node) ?? `${role}, no read-only state`;
+        },
+      },
+      options?.timeout,
+    );
+  }
+
   toBeChecked(options?: { checked?: boolean; timeout?: number }): Promise<void> {
     return this.stateMatcher('toBeChecked', options);
   }
@@ -471,7 +495,14 @@ class AsyncExpectationImpl implements AsyncExpectation {
   }
 
   toHaveScreenshot(nameOrOptions?: string | ScreenshotOptions, options?: ScreenshotOptions): Promise<void> {
-    return expectScreenshot(this.internals.context, this.internals.expression, this.negated, nameOrOptions, options);
+    return expectScreenshot(
+      this.internals.context,
+      this.internals.expression,
+      this.negated,
+      this.message,
+      nameOrOptions,
+      options,
+    );
   }
 
   toHaveCount(expected: number, options?: { timeout?: number }): Promise<void> {
@@ -548,6 +579,18 @@ function printField(def: TextMatcherDef, actual: string): string {
   return JSON.stringify(def.normalize ? normalizeText(actual) : actual);
 }
 
+/**
+ * What `toBeEditable` reads: undefined for a node the engine reports no
+ * read-only state for, which the matcher cannot judge; else disabled first,
+ * as Playwright reads it, then read-only.
+ */
+function editState(node: SemanticNode): 'disabled' | 'read-only' | 'editable' | undefined {
+  const readonly = node.states?.readonly;
+  if (readonly === undefined) return undefined;
+  if (node.states?.disabled === true) return 'disabled';
+  return readonly ? 'read-only' : 'editable';
+}
+
 function observedState(sample: Sample): string {
   if (sample.node === null) return 'no node';
   const states = sample.node.states ?? {};
@@ -557,6 +600,6 @@ function observedState(sample: Sample): string {
   return active.length === 0 ? 'default states' : `states: ${active.join(', ')}`;
 }
 
-export function createAsyncExpectation(internals: LocatorInternals): AsyncExpectation {
-  return new AsyncExpectationImpl(internals, false);
+export function createAsyncExpectation(internals: LocatorInternals, message?: string): AsyncExpectation {
+  return new AsyncExpectationImpl(internals, false, message);
 }

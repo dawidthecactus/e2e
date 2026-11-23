@@ -9,7 +9,7 @@ import { engineBrand } from '../internal/brands.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { obj } from '../internal/objects.ts';
 import { isSecret } from '../secrets.ts';
-import { ENGINE_SPI_VERSION, LOCATOR_ACTION_KINDS, POINTER_ACTION_KINDS } from './contract.ts';
+import { ENGINE_SPI_VERSION, KNOWN_LOCATOR_ACTION_KINDS, POINTER_ACTION_KINDS } from './contract.ts';
 import type { Secret } from '../types.ts';
 import type { Engine, EngineCapability, EngineFixtureContext, EngineHandle } from './index.ts';
 
@@ -28,8 +28,10 @@ const KNOWN_KEYS = [
   'performAt',
   'pointerActions',
   'tapModifiers',
+  'selectsDevice',
   'keyboard',
   'fixtures',
+  'isolation',
   'state',
   'artifacts',
   'validateApp',
@@ -276,6 +278,13 @@ export function defineEngine<Fixtures extends object = {}>(declared: EngineSpec<
       throw invalid(name, 'declares tapModifiers without perform: modifiers ride the tap actions perform receives');
     }
   }
+  if (spec.selectsDevice !== undefined) {
+    if (typeof spec.selectsDevice !== 'boolean') throw invalid(name, 'selectsDevice must be a boolean');
+    if (spec.selectsDevice && spec.prepare === undefined) throw invalid(name, 'declares selectsDevice without prepare: prepare binds the device --device names');
+  }
+  if (spec.isolation !== undefined && spec.isolation !== 'attempt' && spec.isolation !== 'worker') {
+    throw invalid(name, `isolation must be 'attempt' or 'worker', got ${JSON.stringify(spec.isolation)}`);
+  }
   if (spec.keyboard !== undefined && !capabilities.has('observation')) {
     throw invalid(name, 'declares keyboard without observe: the focused field is read off the observation');
   }
@@ -291,8 +300,10 @@ export function defineEngine<Fixtures extends object = {}>(declared: EngineSpec<
     const fn = spec[member];
     if (fn !== undefined) handle[member] = fn.bind(spec);
   }
-  if (spec.actions !== undefined) handle['actions'] = declaredKinds(name, 'actions', spec.actions, LOCATOR_ACTION_KINDS);
+  if (spec.actions !== undefined) handle['actions'] = declaredKinds(name, 'actions', spec.actions, KNOWN_LOCATOR_ACTION_KINDS);
   if (spec.tapModifiers === true) handle['tapModifiers'] = true;
+  if (spec.selectsDevice === true) handle['selectsDevice'] = true;
+  if (spec.isolation === 'worker') handle['isolation'] = 'worker';
   if (spec.pointerActions !== undefined) {
     handle['pointerActions'] = declaredKinds(name, 'pointerActions', spec.pointerActions, POINTER_ACTION_KINDS);
   }

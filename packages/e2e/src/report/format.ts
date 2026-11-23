@@ -8,6 +8,7 @@ import { stripVTControlCharacters } from 'node:util';
 import picocolors from 'picocolors';
 import type { CacheWrite } from '@e2e-dev/core/lib/cache/context';
 import { sanitizeText, truncateUtf8 } from '@e2e-dev/core/lib/internal/errors';
+import { redactError } from '@e2e-dev/core/lib/run/secrecy';
 import type { ResultStatus } from '@e2e-dev/core/lib/run/records';
 import type { StepModelInfo, StepRecord } from '@e2e-dev/core/lib/run/steps';
 
@@ -18,6 +19,15 @@ export type Colors = ReturnType<typeof picocolors.createColors>;
 export const F_POINTER = '❯';
 export const F_CHECK = '✓';
 export const F_CROSS = '×';
+
+/**
+ * A step's call under the session it ran on when that is not the test's
+ * own, `launch-1 › locator.tap`: how the terminal and the trace page list
+ * such a step. `actor` and `call` come already escaped for the format.
+ */
+export function withActor(actor: string | undefined, call: string): string {
+  return actor === undefined ? call : `${actor} › ${call}`;
+}
 
 /** Every untrusted field is capped here before it reaches the terminal. */
 const MAX_FIELD_BYTES = 8192;
@@ -40,7 +50,7 @@ export function bounded(text: string): string {
  * when no list reporter shows it.
  */
 export function failureLine(error: { readonly code: string; readonly message: string }): string {
-  return `${bounded(error.code)}: ${bounded(error.message)}\n`;
+  return `${bounded(error.code)}: ${bounded(redactError(error.message))}\n`;
 }
 
 /**
@@ -55,12 +65,13 @@ export function ellipsize(text: string, max: number): string {
 
 /** The terminal width; a pty without a size reports 0, which counts as unknown. */
 export function terminalColumns(): number {
-  return process.stdout.columns || 80;
+  // stderr's when stdout is not a terminal: `list` beside `json` paints there.
+  return process.stdout.columns || process.stderr.columns || 80;
 }
 
 /** The terminal height; a pty without a size reports 0, which counts as unknown. */
 export function terminalRows(): number {
-  return process.stdout.rows || 40;
+  return process.stdout.rows || process.stderr.rows || 40;
 }
 
 /** vitest's duration format: whole milliseconds under a second, two decimals above. */

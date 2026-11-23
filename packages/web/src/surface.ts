@@ -46,7 +46,7 @@ import {
 } from '@e2e-dev/core/engine';
 import { matchesText } from '@e2e-dev/core/engine';
 import { classifyActionError, classifyInputError, dispatchLocatorAction, dispatchPointerAction } from './actions.ts';
-import { BrowserConnection, connectCdp, type BrowserLaunchOptions, type BrowserName } from './browser-connection.ts';
+import { BrowserConnection, connectCdp, defaultChromiumSandbox, type BrowserLaunchOptions, type BrowserName } from './browser-connection.ts';
 import { AttemptSession, type AttemptTab, type StorageState } from './attempt-session.ts';
 import type { CdpEndpointResolver } from './cdp-recovery.ts';
 import { LeasedBrowsers, type BrowserProvider, type LeaseDownloads } from './provider.ts';
@@ -178,6 +178,11 @@ export interface WebOptions {
    * provider implies chromium and excludes `connect`.
    */
   readonly browser?: BrowserName | BrowserProvider;
+  /**
+   * Whether a locally launched Chromium runs with its OS sandbox on; default
+   * `true` on macOS and Windows, `false` on Linux.
+   */
+  readonly chromiumSandbox?: boolean;
   /**
    * Initial viewport of every attempt's page; default 1280 by 720. `null`
    * emulates no size: the page fills the browser window, whatever size the
@@ -330,6 +335,7 @@ export class PlaywrightSurface {
 
   private readonly browserName: BrowserName;
   private readonly connection = new BrowserConnection();
+  private readonly chromiumSandbox: boolean;
   /** What the options add to the launch of the browser the engine launches. */
   private readonly launch: BrowserLaunchOptions;
   private readonly connect: WebConnectOptions | undefined;
@@ -375,6 +381,7 @@ export class PlaywrightSurface {
 
   constructor(options: WebOptions) {
     this.browserName = typeof options.browser === 'string' ? options.browser : 'chromium';
+    this.chromiumSandbox = options.chromiumSandbox ?? defaultChromiumSandbox();
     this.leases = typeof options.browser === 'object' && options.browser !== null ? new LeasedBrowsers(options.browser) : undefined;
     this.connect = options.connect;
     this.launch = options.webmcp === true ? webmcpLaunch(this.browserName) : {};
@@ -462,7 +469,14 @@ export class PlaywrightSurface {
     if (signal.aborted) throw cancelled(`browser ${verb} cancelled`);
     try {
       return await raceAbort(
-        this.connection.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS, this.connector(signal), this.launch),
+        this.connection.acquire({
+          name: this.browserName,
+          headed: this.headed,
+          timeoutMs: BROWSER_LAUNCH_TIMEOUT_MS,
+          chromiumSandbox: this.chromiumSandbox,
+          launch: this.launch,
+          connect: this.connector(signal),
+        }),
         signal,
         `browser ${verb}`,
       );

@@ -37,5 +37,5 @@ export type {
   StepVerdictStatus,
 } from '@e2e-dev/core/lib/agent/executor';
 export type { StepTurn, VisionDegradation } from '@e2e-dev/core/lib/run/steps';
-export type { RunEvent, RunEventOf, RunExitCode, RunStatus } from './run/events.ts';
+export type { CollectedTestInfo, PausedKey, PausedStep, RunEvent, RunEventOf, RunExitCode, RunStatus } from './run/events.ts';
 export type { EngineAppDeclaration } from '@e2e-dev/core/lib/engine/index';

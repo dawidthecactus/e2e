@@ -161,7 +161,7 @@ test('Settings opens', async ({ app, screen }) => {
   | ChatGPT Plus 或 Pro | `npx e2e login openai` |
   | GitHub Copilot | `npx e2e login github-copilot` |
   | OpenCode Console（OpenCode Zen 和 OpenCode Go） | `npx e2e login opencode-console` |
-  | SuperGrok 或 X Premium+ | `npx e2e login spacexai` |
+  | SuperGrok 或 X Premium+ | `npx e2e login spacexsi` |
   | Claude Max 或 Team（Claude Code） | 使用套餐每月 API 额度对应的 API 密钥。参阅 [Claude Max 或 Team](/subscriptions#claude-max-or-team)。 |
 
   如果你已通过 GitHub CLI 登录，Copilot 会使用该登录信息。参阅[订阅](/subscriptions)。
@@ -239,7 +239,7 @@ bunx e2e run tests/agent.e2e.ts
 ```
 </CodeGroup>
 
-如果在向导中选择了 **None**，请先[添加模型](/models)。添加 `--headed` 可以观看网页端测试的运行过程。添加 `--no-cache` 可以跳过缓存的操作。
+如果在向导中选择了 **None**，请先[添加模型](/models)。添加 `--headed` 可以观看网页端测试的运行过程。添加 `--no-cache` 可以直接调用模型，不回放缓存的操作。
 
 ### 配置项目
 

@@ -22,17 +22,17 @@ test('checkout summary', async ({ screen }) => {
 
 | 调用 | 返回值 |
 | --- | --- |
-| [`expect(locator)`](#locator-matchers) | `AsyncExpectation` |
-| [`expect(screen)`](#screenshot-matchers) | `ScreenExpectation` |
+| [`expect(locator, message?)`](#locator-matchers) | `AsyncExpectation` |
+| [`expect(screen, message?)`](#screenshot-matchers) | `ScreenExpectation` |
 | [`expect(fixture)`](#browser-matchers) | 引擎的匹配器集合 |
 | [`expect(value, message?)`](#value-matchers) | `ValueExpectation<T>` |
 | [`expect.poll(read, options?)`](#polling-a-value) | `PollExpectation<T>` |
-| [`expect.soft(actual)`](#soft-assertions) | 相同的匹配器，但会保留失败 |
+| [`expect.soft(actual, message?)`](#soft-assertions) | 相同的匹配器，但会保留失败 |
 | [`expect.any(Class)` 等](#asymmetric-matchers) | `AsymmetricMatcher` |
 
 `expect` 根据参数本身的类型进行区分：
 
-- 引擎测试夹具可以提供匹配器，例如 `expect(browser).toHaveURL()`。这样的测试夹具属于 `Expectable<E>`：引擎通过 [`expectable`](/reference/engine#contributed-fixtures) 附加匹配器集合 `E`，`expect(fixture)` 会返回该集合。
+- 引擎提供的内置测试夹具可以提供匹配器，例如 `expect(browser).toHaveURL()`。这样的测试夹具属于 `Expectable<E>`：引擎通过 [`expectable`](/reference/engine#contributed-fixtures) 附加匹配器集合 `E`，`expect(fixture)` 会返回该集合。
 - 其他所有参数都使用值匹配器，包括 Promise。请先等待 Promise 完成，再将其结果传给 `expect`。
 
 声明见[类型](#types)。
@@ -41,6 +41,14 @@ test('checkout summary', async ({ screen }) => {
 
 `expect(locator)` 返回 `AsyncExpectation`。每个匹配器都会轮询，直到条件成立或超时，并遵循[行为](#behavior)中的规则，包括[严格性](#strictness)、[文本匹配](#text-matching)和[安全字段](#secure-fields)。选项见 [`AsyncExpectation`](#asyncexpectation-and-textmatcheroptions)。
 
+`expect(locator, message)` 和 `expect.soft(locator, message)` 的第二个参数用于描述检查。它出现在下列匹配器每次断言失败的开头（包括 `.not`），位于匹配器和定位器之前；定位器匹配到多个节点时的 `LOCATOR_AMBIGUOUS` 错误也以它开头。选项无效或读取被拒绝时，失败信息不带该消息。`expect(screen, message)` 以同样的方式接受消息。
+
+```ts
+await expect(screen.getByTestId('cart-empty'), 'the cart is empty').toBeVisible();
+// ASSERTION_FAILED: the cart is empty: expect.toBeVisible failed
+// locator: getByTestId("cart-empty")
+```
+
 | 匹配器 | 说明 |
 | --- | --- |
 | [`toBeVisible`](#tobevisible-and-tobehidden) | 等待可见 |
@@ -48,6 +56,7 @@ test('checkout summary', async ({ screen }) => {
 | [`toBeAttached`](#tobeattached) | 等待存在一个匹配项 |
 | [`toBeEnabled`](#tobeenabled-and-tobedisabled) | 等待启用状态 |
 | [`toBeDisabled`](#tobeenabled-and-tobedisabled) | 等待禁用状态 |
+| [`toBeEditable`](#tobeeditable) | 等待启用且非只读的控件 |
 | [`toBeChecked`](#tobechecked-tobeselected-and-tobeexpanded) | 等待勾选状态 |
 | [`toBeSelected`](#tobechecked-tobeselected-and-tobeexpanded) | 等待选中状态 |
 | [`toBeExpanded`](#tobechecked-tobeselected-and-tobeexpanded) | 等待展开状态 |
@@ -95,6 +104,21 @@ await expect(screen.getByRole('button', 'Pay')).toBeEnabled({ enabled: false });
 
 - `<fieldset disabled>` 内的控件被禁用，除非它位于该 fieldset 的第一个 `<legend>` 中。
 - 祖先上的 `aria-disabled="true"` 会禁用其下的控件，直到 `aria-disabled="false"` 截断该继承链。
+
+#### `toBeEditable`
+
+等待控件启用且非只读。
+
+```ts
+await expect(screen.getByLabel('Email')).toBeEditable();
+await expect(screen.getByLabel('Order id')).toBeEditable({ editable: false }); // read-only or disabled
+```
+
+- 只读是引擎报告的状态。Web 引擎对原生控件和 `aria-readonly` 遵循 Playwright 的规则，角色使用 e2e 的角色，禁用状态使用 `toBeEnabled()` 报告的状态。`input`、`textarea` 和 `select` 只读取自身的 `readonly` 属性（任意值）。接受 `aria-readonly` 的角色（`textbox`、`searchbox`、`combobox`、`listbox`、`checkbox`、`switch`、`slider`、`spinbutton`、`gridcell` 等）的元素读取 `aria-readonly="true"`（不区分大小写）。编辑宿主只按其 ARIA 角色读取它（显式角色或标签的角色，网格中的 `td` 是 `gridcell`）；普通的 `<div contenteditable>` 没有角色。其他编辑宿主及其内部的任何元素都不是只读的。
+- 禁用的节点也不可编辑，禁用的判定与 [`toBeEnabled`](#tobeenabled-and-tobedisabled) 相同。
+- 其他节点（例如按钮）没有只读状态。无论是否取反，匹配器都会失败，失败信息会说明这一点。
+- 在设备上，只有当平台报告文本字段是否接受输入时（例如 Android），该字段才有只读状态。iOS 不报告，因此 iOS 字段会让匹配器失败，而不是靠猜测通过。
+- 引擎从需要 `e2e` 0.25.0 的 `@e2e-dev/web` 和 `@e2e-dev/mobile` 版本开始报告此状态。使用旧引擎时，每个节点都会以 `no read-only state` 失败：请随 `e2e` 一起更新引擎。
 
 #### `toBeChecked`、`toBeSelected` 和 `toBeExpanded`
 
@@ -448,7 +472,7 @@ expect(created, 'the company exists through the API').toBeTruthy();
 // ASSERTION_FAILED: the company exists through the API: expected undefined to be truthy
 ```
 
-只有值断言接受消息；定位器或 `browser` 断言的失败信息已经包含定位器和匹配器名称。
+[定位器](#locator-matchers)或 `screen` 断言以同样的方式接受消息。`browser` 断言不接受消息，其失败信息会注明匹配器。
 
 #### 未包含的功能
 
@@ -484,7 +508,7 @@ expect(response).toHaveProperty('body.total', expect.any(Number));
 
 ### 软断言
 
-`expect.soft(actual)` 接受与 `expect(actual)` 相同的参数，并返回相同的匹配器。软匹配器失败时不会抛出异常：失败保留在当前尝试中，测试体继续执行。
+`expect.soft(actual, message?)` 接受与 `expect(actual, message?)` 相同的参数，并返回相同的匹配器。软匹配器失败时不会抛出异常：失败保留在当前尝试中，测试体继续执行。
 
 ```ts
 test('checkout summary', async ({ agent, screen }) => {
@@ -638,16 +662,16 @@ type NotAny<T> = 0 extends 1 & T ? never : T;
 
 /** The `expect(actual)` call: a locator, `screen`, an engine fixture, or a value, told apart by the argument. */
 export interface ExpectCall {
-  <L extends Locator>(actual: NotAny<L>): AsyncExpectation;
-  <S extends Screen>(actual: NotAny<S>): ScreenExpectation;
+  <L extends Locator>(actual: NotAny<L>, message?: string): AsyncExpectation;
+  <S extends Screen>(actual: NotAny<S>, message?: string): ScreenExpectation;
   <E extends object>(actual: Expectable<E>): E;
   <T>(actual: T, message?: string): ValueExpectation<T>;
 }
 
 /** The `expect.soft(actual)` call: `expect(actual)` whose failures are kept instead of thrown. */
 export interface SoftExpectCall {
-  <L extends Locator>(actual: NotAny<L>): AsyncExpectation;
-  <S extends Screen>(actual: NotAny<S>): ScreenExpectation;
+  <L extends Locator>(actual: NotAny<L>, message?: string): AsyncExpectation;
+  <S extends Screen>(actual: NotAny<S>, message?: string): ScreenExpectation;
   <E extends object>(actual: Expectable<E>): E;
   <T>(actual: T, message?: string): SoftValueExpectation<T>;
 }
@@ -687,6 +711,8 @@ export interface AsyncExpectation {
   toBeEnabled(options?: { enabled?: boolean; timeout?: number }): Promise<void>;
   /** Waits for disabled state. */
   toBeDisabled(options?: { timeout?: number }): Promise<void>;
+  /** Waits for an enabled control that is not read-only; `editable: false` waits for a disabled or read-only one. A node with no read-only state, a button included, fails either way. */
+  toBeEditable(options?: { editable?: boolean; timeout?: number }): Promise<void>;
   /** Waits for checked state; `checked: false` waits for unchecked state. */
   toBeChecked(options?: { checked?: boolean; timeout?: number }): Promise<void>;
   /** Waits for selected state. */

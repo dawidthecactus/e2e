@@ -55,7 +55,8 @@ gates, and limits.
 A coding agent the user already signs in to runs agent steps over the Agent Client Protocol:
 install `@e2e-dev/acp` and its adapter, and put
 `claudeCode({ model: 'sonnet' })` or `codex()` under
-`executor`; no model provider is needed. See the shipped `docs/subscriptions.mdx` or
+`executor`; no model provider is needed. Codex signs in with
+`codex login`, or with `OPENAI_API_KEY` set, which it then saves as its login. See the shipped `docs/subscriptions.mdx` or
 [the online guide](https://e2e.com/docs/subscriptions#use-your-coding-agent).
 
 - Pass a model instance, not a string (`INVALID_CONFIG`).
@@ -135,7 +136,8 @@ Options:
 The tools, one per engine action. Name the target as the screen names it
 (files in `params`); the agent picks the verb:
 
-- `observe`: re-read the screen after waiting on work in progress.
+- `observe`: re-read the screen after waiting on work in progress, or to
+  check whether a press that commits something went through.
 - `tap`: button, link, menu item, tab, checkbox, row, field.
 - `double_tap`/`long_press`/`right_click`: second-click item, long-press
   menu, context menu only.
@@ -184,7 +186,12 @@ nothing to tap by id opens with a screenshot attached. A device has no
 `right_click`, `select`, `upload`, or `scroll_to` by node id. Pixels mask
 secure fields only (topic writing-tests). A result says when an action
 closed an on-screen keyboard; on a touch screen that tap was often spent
-closing it, so act again.
+closing it, so act again. A control that commits something (save, submit,
+delete) is pressed once for each commit the step asks for. When the tap
+only closed the keyboard, the agent presses again at once. Otherwise it
+checks the screen before a second press, and presses again only when the
+screen shows the first press did not commit (a validation error that
+blocked the save and that the agent then corrected).
 
 ## assert, waitFor, extract: one question
 
@@ -355,10 +362,11 @@ of sleeping.
 
 A redacted snapshot of the screen (roles, names, text, states), prior-step
 summaries, and your context; never raw HTML, cookies, headers, environment
-values, or a `Secret`'s value; password fields masked. The first
-screen of a step arrives whole; later action results report what changed,
-keyed by node ids stable while an element exists, or the whole screen when
-most changed. Pixels arrive through `vision` on a judgment or the act loop's
+values, or a `Secret`'s value; password fields masked, unless a page
+script hides one from e2e. The first screen of a step arrives whole; later
+action results report what changed, keyed by node ids stable while an
+element exists, or the whole screen when most changed.
+Pixels arrive through `vision` on a judgment or the act loop's
 `screenshot` and point tools, with secure fields masked. When
 the browser engine's tree capture times out, the model gets a screenshot and
 a warning, a judgment needs `vision: true`, and no control may be inferred
@@ -497,10 +505,19 @@ before writing the AI trace.
   https://e2e.com/docs/tools#read-a-nodes-computed-style.
 - `createToolLoopExecutor` keeps the loop and replaces prompt and tool
   vocabulary; spread `createGrammarTools(ctx, { guard })` into its tools and
-  start its `system` with `BASE_RULES` to keep the built-in actions.
+  start its `system` with `BASE_RULES` to keep the built-in actions. A
+  `complete_step` sent in the same turn as other calls waits for the calls
+  before it, and is refused when one failed or the last one changed
+  nothing; calls after it don't run.
 - Any `StepExecutor` (`{ name, version?, cache?, runStep(ctx) }`) goes under
   `executor`; the runner still owns observations, actions, budgets, and the
   report, and `system` or `tools` beside `executor` is `INVALID_CONFIG`.
+- The run redacts the model provider keys in its environment from reports,
+  traces, and output. For a key it cannot see (one passed in code, one an
+  agent reads from its own login file), call
+  `registerProviderKey(name, value)` from `e2e/agent`; an executor that cuts
+  text itself calls `redactSecrets(text)` first, and one that sends its agent
+  text of its own calls `redactStepText(ctx, text)`.
 
 Reference: https://e2e.com/docs/agents
 

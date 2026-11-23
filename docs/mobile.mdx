@@ -62,8 +62,10 @@ Android:
 ```
 
 A device target needs `bundleId`, `appPath`, or both. The engine installs
-nothing on its own. Call `device.installApp()` once per device, for example
-in a fixture every test takes. With no path, it installs `app.appPath`.
+nothing on its own. Call `device.installApp()` once per device, in a
+[worker fixture](/fixtures#share-a-fixture-across-a-worker) with
+[`auto: true`](/fixtures#run-a-fixture-for-every-test). With no path, it
+installs `app.appPath`.
 Without `bundleId`, `app.open()` launches the app the build installed.
 
 To run the suite in CI, see [Mobile jobs](/ci#mobile-jobs).
@@ -239,6 +241,9 @@ controls that `screen` queries can't name.
 const { app } = await device.installApp('./build/MyApp.app', { reinstall: true });
 await device.openApp(app);
 ```
+
+`device.uninstallApp(id)` removes an app and `device.isAppInstalled(id)`
+checks for one; without an id, both use the pinned app.
 
 `device.openApp` takes a bundle id, package, or display name, never a link.
 `device.openLink` opens a deep link or a web link into the pinned app, or
@@ -469,6 +474,12 @@ A paired iPhone or iPad that is reachable (USB or network) counts as booted.
 If none are booted, it boots a shut-down one: on iOS an iPhone before an iPad
 before an Apple TV, on Android a phone or tablet before a TV, then the newest
 OS, then name order. Two workers never drive the same device.
+
+To run a target on another device for one run, pass the device's name, a
+simulator UDID, or an emulator serial with `--device`, and the target with
+`--target` when several selected targets can take a device:
+`e2e run --target iphone --device 'iPad Pro 13-inch (M5)'`.
+The run drives that one device, in place of the target's `device`.
 
 ## Agent tools
 

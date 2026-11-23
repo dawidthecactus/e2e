@@ -197,8 +197,9 @@ page on any other origin is another route.
   already on screen before the actions proves nothing. When the step's last
   action moved to another route, that move is the evidence.
 - An alert that the replay raised and the recording never saw stops the
-  replay. The web engine does not observe Next.js App Router's route
-  announcer, so its title echo never counts.
+  replay. The web engine does not observe the
+  [Next.js](/frameworks/nextjs#fix-next-js-problems) App Router's route announcer, so
+  its title echo never counts.
 - Text that differs on every run, such as a date, a duration, or an id,
   is skipped while a stable change exists on either side of the step's delta,
   whether something appeared or disappeared. With nothing else, it is kept,
@@ -283,9 +284,18 @@ A `gap` is an action the cache can't repeat: a mutating
 [project tool](/tools), or a value the agent read off the screen, typed
 after it saw a screenshot, or worked out from the date. `step.cache.derived`
 names the rule: `whole-node` (a control's whole name or text),
-`minted-token` (a code or id the app showed as its own word), `date`, or
-`pixels`. Values from the instruction or `params`, and values the agent
-composed itself, replay.
+`minted-token` (a code or id the app showed as its own word, or any value
+typed into a field marked `autocomplete="one-time-code"`, or into the
+focused field in a step that showed one), `date`, or `pixels`. Values from
+the instruction or `params`, and values the agent composed itself, replay,
+except in a one-time-code field or the focused field in a step that showed
+one: there only a whole value of two or more characters that the
+instruction or `params` spell out replays.
+
+Values typed in a row into several fields, with only taps or `Tab` between
+them, are also judged joined. A code the page showed, typed one digit per box
+or three and three, makes the recording a gap from its first piece, even when
+no field declares a purpose, as no field does on iOS and Android.
 
 ## What a recording holds
 
@@ -394,6 +404,7 @@ CI=1 bunx e2e run --strict-cache
 | `invalid-entry`, `wrong-context`, `target-not-found`, `target-ambiguous`, `viewport-changed`, `action-failed`, `action-uncertain`, `end-mismatch`: the app or the entry changed | A step never recorded (a new or edited instruction or params) |
 | `no-entry`, when the cache directory holds a recording of the same step under another key | A `gap` or a `truncated` recording |
 | | A step whose store read fails |
+| | A step whose test's `testId` in `report.json`, target name, or agent name is over 300 characters, when an earlier `e2e` version recorded it under another key and no `read-write` run of this version has replayed it since |
 
 A recording under another key comes from an `e2e` upgrade that changed the
 keys, or a change to the project id, the app's identity, or the agent's

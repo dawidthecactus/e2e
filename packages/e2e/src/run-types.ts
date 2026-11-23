@@ -8,7 +8,7 @@ import type { Report1Document } from './report/build.ts';
 import type { ProjectConfig } from '@e2e-dev/core/lib/types';
 
 /** The reporters the runner ships, named by id; each is a `Reporter` on the same contract. */
-export type BuiltinReporter = 'list' | 'json' | 'junit' | 'markdown';
+export type BuiltinReporter = 'list' | 'dot' | 'json' | 'junit' | 'markdown';
 
 /**
  * The run's report document, the one `.e2e/report.json` holds. Its
@@ -27,8 +27,10 @@ export interface FinishedRun {
   readonly exitCode: RunExitCode;
   /** Absolute project root, what the terminal shows paths relative to. */
   readonly projectRoot: string;
-  /** Where `report.json` was written; undefined when the write failed or config never loaded. */
+  /** Where `report.json` was written; undefined when the run stopped before its tests, the write failed, or config never loaded. */
   readonly reportPath: string | undefined;
+  /** Absolute output directory (`.e2e` unless `output` says otherwise), where `report.json` and the report files go. */
+  readonly outputDir: string;
   /** Absolute directory the report's artifact paths are relative to: `<output>/results`, a directory per test. */
   readonly artifactsRoot: string;
   /** Where `--ai-trace` wrote the run's model calls, when it was requested. */
@@ -58,28 +60,81 @@ export interface FinishedRun {
 export type ReporterSummary = readonly { readonly label: string; readonly text: string }[];
 
 /**
- * A reporter in `reporters`, the contract the built-in `list`, `json`,
- * `junit`, and `markdown` reporters implement too. `onEvent` sees every run event as it
- * happens, exactly what the `list` reporter renders, and must not block: a
- * throw quarantines it for the rest of the run. Event types are added over
- * time; a reporter handles the ones it knows and ignores the rest. `onRunFinished` runs once
- * `report.json` is written and the summary has printed; it is awaited within
- * a fixed budget, and the rows it resolves with print under the summary. Its
- * `signal` aborts when that budget runs out or the run is forced to stop, so
- * a reporter hands it to its requests and leaves nothing running behind. A
- * reporter can never change the run's status or exit code: a failure or a
- * timeout is one line on stderr. Like every live value, a reporter never
- * crosses a process boundary; workers construct their own copy when they
- * load the config module and never call it, so constructing one must have no
- * side effects.
+ * One file a reporter's `reportFiles` asks the runner to write. The runner
+ * writes it atomically, creating its directory, and its row prints under
+ * the summary when it has a `label`.
+ */
+export interface ReportFile {
+  /** Where it goes: absolute, or relative to the project root. Never `report.json` itself. */
+  readonly path: string;
+  readonly content: string;
+  /** The summary row's label; its text is the path from the project root. No row without one. */
+  readonly label?: string;
+  /** Printed after the path in the summary row, such as `(one file, 2.1 MB)`. */
+  readonly note?: string;
+}
+
+/**
+ * A reporter in `reporters`, the contract the built-in `list`, `dot`,
+ * `json`, `junit`, and `markdown` reporters are built on, with nothing the runner
+ * gives them alone. Every hook is optional, but a reporter has at least one,
+ * and every reporter that has a hook gets it.
+ *
+ * - `onEvent` is the one live hook. It sees every run event as it happens
+ *   and must not block: a throw quarantines it for the rest of the run.
+ *   What user code prints is an `output` event, and a test waiting for a
+ *   person a `paused` one. Event types are added over time; a reporter
+ *   handles the ones it knows and ignores the rest.
+ * - `reportFiles` renders the files the reporter writes; the runner writes
+ *   them. A forced stop leaves it a few seconds, so a file left from the
+ *   previous run rarely sits beside this run's `report.json`.
+ * - `onRunFinished` runs once `report.json` and every report file are
+ *   written; it is awaited within a fixed budget. Its `signal` aborts when
+ *   that budget runs out or the run is forced to stop, so a reporter hands
+ *   it to its requests and leaves nothing running behind.
+ * - `onSummary` runs last, with the rows of every report file and every
+ *   `onRunFinished`, the built-ins' first.
+ *
+ * A reporter only observes. It never answers a pause, and it can never
+ * change the run's status or exit code: a hook that fails or runs out of
+ * time is one line on stderr. An event is frozen, one level deep, and the
+ * records it carries are shared with every other reporter: copy what you
+ * want to change. Like every live value, a reporter never crosses a process
+ * boundary; workers construct their own copy when they load the config
+ * module and never call it, so constructing one must have no side effects.
+ * `e2e run --watch` hands the same object every run.
  */
 export interface Reporter {
   /** Label in diagnostics; required. */
   readonly name: string;
+  /**
+   * Set when the reporter shows the run to a person in the terminal, as
+   * `list` and `dot` do: what user code prints, run errors, and a test
+   * waiting at a pause. The runner then prints none of them itself; without
+   * an interactive reporter, or once its `onEvent` throws, it prints them on
+   * stderr. Its hooks write to the terminal directly, past the redaction of
+   * user output, so it prints only what the events and the report hold,
+   * which are redacted already; beside `json` its stdout is on stderr. What any other reporter prints outside
+   * `onSummary` is user output: redacted, and on stderr. An embedded run (`quiet`) runs none, and a
+   * forced stop never cuts its `onRunFinished` short: its output is local.
+   */
+  readonly interactive?: boolean;
   /** Every run event as it happens. Must not block or throw. */
   onEvent?(event: RunEvent): void;
-  /** Runs once the report is written and the summary printed; awaited one minute. Returned rows print under the summary. */
+  /** The files to write for the finished run; awaited one minute, or a few seconds once the run is forced to stop. */
+  reportFiles?(run: FinishedRun, signal: AbortSignal): readonly ReportFile[] | Promise<readonly ReportFile[]>;
+  /** Runs once the report and the report files are written; awaited one minute. Returned rows reach `onSummary`. */
   onRunFinished?(run: FinishedRun, signal: AbortSignal): Promise<ReporterSummary | void>;
+  /**
+   * Runs last, even after a forced stop, with every report file's and every
+   * `onRunFinished`'s rows: the built-ins' first, then the others' in
+   * `reporters` order, and the finished run. It is where a reporter
+   * prints: what it writes here is redacted and goes to the stream it was
+   * written to, stdout included, so it can print a document of its own.
+   * Beside `json`, only the JSON report is on stdout, and this prints on
+   * stderr.
+   */
+  onSummary?(rows: ReporterSummary, run: FinishedRun): void;
 }
 
 /**
@@ -175,10 +230,11 @@ export interface TestFilterResult {
 /** The config an `e2e.config.ts` default-exports, through `defineConfig`. */
 export interface E2EConfig extends ProjectConfig {
   /**
-   * Output renderers and reporter objects. `junit` writes `<output>/junit.xml`,
-   * `markdown` writes `<output>/summary.md`, `json` prints the report and
-   * excludes `list`; a `Reporter` object runs
-   * beside them and `--reporter` never removes it.
+   * The run's reporters: built-in ids, each its factory from
+   * `e2e/reporters` with no options, and reporter objects. `list` and `dot`
+   * show the run on stdout, or on stderr beside `json`, which prints the
+   * report there; `junit` writes `<output>/junit.xml` and `markdown`
+   * `<output>/summary.md`. `--reporter` replaces the built-ins only.
    */
   reporters?: readonly (BuiltinReporter | Reporter)[];
   /** Test filters, in order, run with `--changed-since`: each judges the tests the one before it kept. */

@@ -108,8 +108,8 @@ act or the assertions.
 
 `test` registers everything, and `describe`, `beforeEach`, `afterEach`,
 `beforeAll`, and `afterAll` are also top-level imports of the same functions
-(`import { describe, beforeEach } from 'e2e'`; `@e2e-dev/web` and
-`@e2e-dev/mobile` export `test`, `describe`, and the hooks typed with their fixture; a
+(`import { describe, beforeEach } from 'e2e'`; `@e2e-dev/web`,
+`@e2e-dev/mobile`, and `@e2e-dev/desktop` export `test`, `describe`, and the hooks typed with their fixture; a
 `test.extend()` chain registers hooks that see its fixtures through
 `test.beforeEach`). Everything registers at import, so a `describe` body is
 synchronous (`async` is a `COLLECTION_ERROR`).
@@ -121,19 +121,26 @@ describe('group', { tags: ['billing'] }, () => { /* tests and hooks */ });
 describe('checkout flow', { serial: true }, () => { /* ordered, shared app state */ });
 beforeEach(async ({ app }) => {});     // per attempt, with test fixtures
 afterEach(async ({ screen }) => {});   // runs after failures too, with its own cleanup budget
-beforeAll(async ({ platform }) => {}); // per suite realm, no app fixtures
+beforeAll(async ({ platform }) => {}); // per suite realm, worker fixtures only (device, app, screen on mobile)
 afterAll(async () => {});
 test.skip('later', async () => {});
 test.only('focus', async () => {});         // local only: CI fails with ONLY_IN_CI
 test.skipIf(process.platform === 'win32')('watcher', async () => {}); // condition read at collection: truthy registers it skipped, as { skip: true }
 test.runIf(process.env.CI)('ci only', { tags: ['ci'] }, async () => {}); // test.skipIf(!condition)
+test.each([{ user: 'Ada' }, { user: 'Grace' }])('signs in as $user', async ({ user }, { app }) => {}); // one test per row; rows that are all arrays are spread: (a, b, { app }), any other table passes each row whole; the fixtures are destructured after the row; titles take $key, %s, %i, %#
+test.for([['standard', '5.00']])('ships %s for %s', async ([speed, price], { app }) => {}); // test.each without the spread: (row, { app })
 test('conditional', async () => { test.skip(await onlyOneOrg(), 'nothing to switch to'); }); // throws: the body stops here, reported skipped; call it before the first step
 test('later', async () => { test.skip('waiting on the API'); }); // bare skip from the body
+test.fixme('not yet', async () => {}); // test.skip's three forms; reported skipped with cause "fixme" and reason "fixme", or "fixme: <reason>" from test.fixme(reason) or test.fixme(cond, reason) in a body
+test('big import', async () => { test.setTimeout(180_000); }); // body or beforeEach: the attempt's timeout, counted from its start; in beforeAll: that hook's own
 test.fail('known gap', async () => {}); // expected to fail: a test failure passes it, a pass fails it with UNEXPECTED_PASS
 test('gap on web', async ({ platform }) => { test.fail(platform === 'web', 'known gap'); }); // marks, does not throw; the body runs on
+describe.fail('legacy', () => {}); // every test inside expected to fail; a reason: describe('legacy', { fail: 'reason' }, fn)
 test.setup('sign in', { sessions: ['admin'] }, async ({ app, screen, session }) => {}); // see Sign-in sessions
 const wsTest = test.extend<{ ws: Ws }>({ ws: async ({ browser }, use) => { await use(await seed()); await drop(); } });
 wsTest('uses the workspace', async ({ ws }) => {}); // code after use() is teardown, runs after failures too
+const dbTest = test.extend<{}, { db: Db }>({ db: [async ({}, use) => { await use(await startDb()); }, { scope: 'worker' }] });
+dbTest.beforeAll(async ({ db }) => { await db.seed(); }); // one db per worker, torn down when the worker ends
 ```
 
 A setup test cannot skip from its body (`INVALID_ARGUMENT`), and neither a
@@ -147,7 +154,7 @@ or a blocked agent verdict still fails the test.
 | `retries` | `config.retries` | 0 to 10; a serial group's value applies to its members. |
 | `tags` | `[]` | Distinct, non-blank, no comma or edge whitespace (`'Login Form'` is fine); union across layers. `--tag smoke` selects, `--tag-mode all` requires every tag. |
 | `skip` | unset | `true` or a reason string. |
-| `fail` | unset | `true` or a reason string: expected to fail, as `test.fail`. Tests only, not groups or setup tests. |
+| `fail` | unset | `true` or a reason string: expected to fail, as `test.fail`. On a group, marks every test in it; not on setup tests or on, inside, or around a serial group. |
 | `platforms` | unset | Only targets with these platforms, e.g. `['ios']`. |
 | `requires` | `[]` | Engine capabilities, e.g. `['browser']`; missing ones skip the test at selection rather than failing it with `UNSUPPORTED_CAPABILITY`. |
 | `session` | unset | Restore state saved by a setup test. |
@@ -164,18 +171,50 @@ Hooks nest: outer `beforeEach` first, inner `afterEach` first. `beforeAll`
 reruns per retry and per serial group (each a fresh module realm) on the
 test timeout; `afterAll` runs on `config.cleanupTimeout`. A failing
 `beforeAll` is a `HOOK_FAILED` run error skipping every test in its scope.
+`beforeAll` and `afterAll` get worker fixtures only: `platform`, worker
+fixtures from `test.extend`, and on mobile `device`, `app`, and `screen`
+(a device keeps its state between tests). On web, `browser`, `app`, and
+`screen` are test fixtures, so UI setup goes in `beforeEach`. Naming a test
+fixture in a suite hook is a `COLLECTION_ERROR` naming it. On mobile a suite
+hook that names none of `device`, `app`, `screen` opens no device attempt; when no device
+attempt can open for the hooks or the run was interrupted, they still run and
+reading `device`, `app`, or `screen` throws the reason.
 
 ## Fixtures
 
-Built-in fixtures are lazy; destructure them. Your own `test.extend`
-fixtures set up for every test registered through that `test`, destructured
-or not, so a state-changing fixture belongs on its own `test`.
+Fixtures are set up on demand. A test body, a hook, and a fixture function
+name what they use by destructuring their first parameter
+(`async ({ app, screen }) => {}`), a `test.each` or `test.for` body the one
+after its row; `async (fixtures) => {}`, `async (_, use)`,
+a rest property, and a bound function (`fn.bind()`) are `COLLECTION_ERROR`, and a fixture that needs nothing
+takes `({}, use)`. A test sets up the `test.extend` fixtures its body and its
+`beforeEach` and `afterEach` hooks name, and the ones those fixtures name
+(same `extend` call or an earlier one, any order; a cycle is
+`COLLECTION_ERROR`). A fixture nothing names does not run: one that exists
+for its side effect takes `[fn, { auto: true }]`, set up for every test, or
+`[fn, { scope: 'worker', auto: true }]`, once per worker. A name the target
+has no fixture for fails the run at collection with the file and line; a test
+skipped on that target (`platforms`, `requires`, `test.skipIf`) is not
+checked there. An `afterEach` that names a fixture whose setup failed is
+skipped. A fixture named like one the `test` already has, built-in ones
+included, extends it (`app: async ({ app }, use) => { await app.open('/x');
+await use(app); }`, no type argument): inside it the name is the previous
+value, everyone else gets what it passes to `use`, and it keeps that
+fixture's type, scope, and `auto` (`device` on mobile: once per worker,
+`beforeAll` gets it; a different `scope` or `auto` is `COLLECTION_ERROR`). A worker
+fixture (`[fn, { scope: 'worker' }]`, second type argument of `extend`) is
+set up once per worker and target by the first test or suite hook that names
+it, torn down when the worker ends, and sees worker fixtures only. Declare it in a module the test files import: a test
+file reloads after a failure and for each serial group and setup test, and a
+worker fixture it declares gets a new
+instance while the old one stays set up until the worker ends.
 
 `app` (`App`) and `screen` (`Screen`): always. `agent` (`Agent`): needs a
 configured model, else `MODEL_UNAVAILABLE` (topic `agent`). `platform`
 (`string`): always, hooks included; `web`, `ios`, `android`, or an engine's
 label. `browser` (`Browser`): browser targets, import `test` from `@e2e-dev/web`.
 `device` (`Device`): device targets, import `test` from `@e2e-dev/mobile`.
+`desktop` (`Desktop`): desktop targets, import `test` from `@e2e-dev/desktop`.
 `session` (`SetupSession`): only in `test.setup`.
 
 ### app
@@ -257,7 +296,9 @@ substring; a `RegExp` matches as written.
 - `visible: true` drops nodes the page hides (a closed drawer) before the
   exactly-one rule. Visibility is what renders, as `toBeVisible()` reads it:
   an `aria-hidden` spinner that paints is visible, so `toBeHidden()` waits
-  for it to go.
+  for it to go. A closed `<details>` body and content under
+  `content-visibility: hidden` are hidden through shadow roots and slots too,
+  unless the page's CSS still shows them.
 - On the web, queries reach open shadow roots and closed roots attached with
   `attachShadow`, not declarative closed roots. `browser.locator(css)`,
   `frameLocator`, and `filter({ hasText })` stop at a closed root; query the
@@ -276,10 +317,10 @@ Each action resolves one node, waits up to `config.actionTimeout` (30 s, or
 `fill(value | Secret)`, `pressSequentially(text, { delay? })`, `clear()`,
 `press(key)`, `check()`, `uncheck()`,
 `selectOption(label | { label } | { value } | { index })` (one option; an
-array is `INVALID_ARGUMENT`), `focus()`, `hover()`, `setInputFiles(paths)`
-(relative to the project root; `[]` clears), `dragTo(locator)`, `scrollIntoView()`,
+array is `INVALID_ARGUMENT`), `focus()`, `blur()`, `hover()`, `setInputFiles(files)`
+(paths relative to the project root, or `{ name, mimeType, buffer: Buffer }` payloads, singly or as an array; `[]` clears; a missing path, or one under a directory the runner cannot search, is `INVALID_ARGUMENT`), `dragTo(locator)`, `scrollIntoView()`,
 `swipe({ direction, momentum? })`. Web only, `UNSUPPORTED_CAPABILITY` on a
-device: `secondaryTap`, `selectOption`, `setInputFiles`, `scrollIntoView`,
+device: `blur`, `secondaryTap`, `selectOption`, `setInputFiles`, `scrollIntoView`,
 and `modifiers`.
 
 `fill` sets the value with no key events; when the app reacts to keystrokes
@@ -292,8 +333,10 @@ Coordinates are CSS pixels, for what the tree does not list: `tap({ position:
 `INVALID_ARGUMENT`), `screen.tapAt({ x, y })` taps a viewport point,
 `screen.doubleTapAt({ x, y })` double-taps a viewport point,
 `screen.swipe({ from, to, duration? })` swipes along a path,
-`screen.swipe({ direction, momentum? })` swipes the viewport. Prefer a
-locator; a point moves with the layout.
+`screen.swipe({ direction, momentum? })` swipes the viewport. Viewport
+points also take percentages from `'0%'` through `'100%'`, rounded to the
+nearest pixel: `{ x: '50%', y: '50%' }`. Prefer a locator; a point moves with
+the layout.
 
 ### Reads
 
@@ -308,7 +351,7 @@ drops out, `<br>` is a space); `toHaveText` reads the same. `isChecked()` on a
 node that cannot be checked (a button), and `inputValue()` on one that holds
 no value (a heading), throw `ACTION_FAILED`. `waitFor({ state?: 'attached' | 'detached' | 'visible' | 'hidden', timeout? })` waits
 within `actionTimeout`, else `LOCATOR_NOT_FOUND`. For a value that has to
-settle use `expect`, not a read. Reading a password field's value or
+settle use `expect`, not a read. Reading a secure field's value or
 attributes is `POLICY_DENIED`, as is `toHaveAttribute` on one, negated too.
 
 `screen.tree()` returns the whole screen as the agent reads it (one node
@@ -321,19 +364,39 @@ a frame throws `INVALID_ARGUMENT`.
 `expect(locator)` polls up to `config.assertionTimeout` (5 s) or
 `{ timeout }`; `.not` inverts and passes once the negation has held 1 s
 continuously, or for the whole `timeout` when that is shorter, so it never
-returns sooner. `expect(value,
-message?)` is synchronous.
-`expect.poll(read, { timeout?, interval?, message? })` re-reads until a value
-matcher passes (`assertionTimeout` and 100 ms by default, stopping with the
+returns sooner. `expect(locator, message?)`, `expect(screen, message?)`, and
+their `expect.soft` forms open each assertion failure with the message.
+`expect(value, message?)` is synchronous.
+`expect.poll(read, { timeout?, interval?, intervals?, message? })` re-reads until a value
+matcher passes (`assertionTimeout` and `[100, 250, 500, 1000]` ms by default, stopping with the
 attempt); a throwing read keeps polling, and it is not a report step. A
 poll that the body or a hook returns without awaiting is cancelled and fails
 that phase with `STEP_NOT_AWAITED`.
+Use `intervals: [<ms>]` in place of the deprecated `interval` option.
 `timeout: 0` on a locator or fixture action, `waitFor`, a matcher, or
 `expect.poll` sets no deadline of its own: the test timeout
 (`cleanupTimeout` in `afterEach`) still bounds it, and `expect.poll` with 0
-outside a test is `INVALID_CONFIG`. A negative or non-finite `timeout` is
+outside a test, hook, or hosted session is `INVALID_CONFIG`. A negative or non-finite `timeout` is
 `INVALID_ARGUMENT` (`INVALID_CONFIG` from `expect.poll`); `agent.*` calls
 take a positive `timeout` only.
+
+Use `await expect(fn, message?).toPass({ timeout?, intervals? })` when
+several assertions must pass together. The block is retried until it
+completes without throwing. Use hard assertions inside the block. Keep
+inner locator timeouts short. With `.not.toPass()`, the assertion
+passes on the first throw or rejection. With `expect.soft(fn).toPass()`,
+you can keep a timeout failure and continue the test body.
+
+Set call options to override the corresponding fields in `config.toPass`.
+The defaults are the phase deadline and pauses of `[100, 250, 500, 1000]` ms.
+Pass a positive `timeout` outside an attempt or hook. In the report, you
+can see the steps from each try, including failed steps. At the cutoff,
+running steps in a `toPass` try or poll read are cancelled.
+
+The config defaults and hook deadline apply to both `expect.poll` and
+`toPass` in `beforeAll`, `afterAll`, and worker fixture teardown. A call
+`timeout` above 2147483647 ms is `INVALID_CONFIG`.
+
 `expect.soft(x)` keeps a failure instead of throwing; the attempt fails
 after the body with every soft failure listed. If the body then calls
 `test.skip`, the attempt still fails, with the skip reason in its `skip`.
@@ -359,11 +422,11 @@ typed; prefer it when the app already has a schema for the response.
 
 | Locator matchers | Browser matchers | Value matchers |
 | --- | --- | --- |
-| `toBeVisible`, `toBeHidden`, `toBeAttached`, `toBeEnabled`, `toBeDisabled`, `toBeChecked`, `toBeSelected`, `toBeExpanded`, `toBeFocused`, `toHaveText`, `toContainText`, `toHaveValue`, `toHaveAttribute`, `toHaveCount`, `toHaveAccessibleName`, `toHaveRole`, `toHaveScreenshot` (also on `screen`) | `toHaveURL`, `toHaveTitle`, `toHaveClass(locator, expected)` | `toBe`, `toEqual`, `toMatchObject`, `toBeTruthy`, `toBeFalsy`, `toBeNull`, `toBeUndefined`, `toBeDefined`, `toHaveLength`, `toHaveProperty`, `toContain`, `toMatch`, `toBeGreaterThan`, `toBeGreaterThanOrEqual`, `toBeLessThan`, `toBeLessThanOrEqual`, `toBeCloseTo`, `toMatchSchema` |
+| `toBeVisible`, `toBeHidden`, `toBeAttached`, `toBeEnabled`, `toBeDisabled`, `toBeEditable`, `toBeChecked`, `toBeSelected`, `toBeExpanded`, `toBeFocused`, `toHaveText`, `toContainText`, `toHaveValue`, `toHaveAttribute`, `toHaveCount`, `toHaveAccessibleName`, `toHaveRole`, `toHaveScreenshot` (also on `screen`) | `toHaveURL`, `toHaveTitle`, `toHaveClass(locator, expected)` | `toBe`, `toEqual`, `toMatchObject`, `toBeTruthy`, `toBeFalsy`, `toBeNull`, `toBeUndefined`, `toBeDefined`, `toHaveLength`, `toHaveProperty`, `toContain`, `toMatch`, `toBeGreaterThan`, `toBeGreaterThanOrEqual`, `toBeLessThan`, `toBeLessThanOrEqual`, `toBeCloseTo`, `toMatchSchema` |
 
 `toHaveText` compares the whole normalized text, `toContainText` a substring
 or RegExp, `toHaveValue` a form control's value as is, whitespace included
-(it fails on a node with none); on a password field all three are
+(it fails on a node with none); on a secure field all three are
 `POLICY_DENIED`, never a comparison against `''`. List forms:
 `toHaveText(['Alpha', /^Beta/])` needs exactly two matches with those texts
 in order; `toContainText(['Alpha', 'Beta'])` needs each entry in a distinct
@@ -372,8 +435,8 @@ presence, `toHaveAttribute(name, value)` the value; `toBeAttached` waits for
 a match, hidden or not; `toHaveClass` compares the whole normalized class
 list or tests a RegExp. A failed matcher is `ASSERTION_FAILED`, exit code 1.
 
-Playwright's `{ checked: false }`, `{ enabled: false }`, `{ visible: false }`,
-and `{ attached: false }` flip their matchers, and `{ ignoreCase: true }`
+Playwright's `{ checked: false }`, `{ enabled: false }`, `{ editable: false }`,
+`{ visible: false }`, and `{ attached: false }` flip their matchers, and `{ ignoreCase: true }`
 works on `toHaveText`, `toContainText`, `toHaveAccessibleName`,
 `toHaveAttribute(name, value)`, and `expect(browser).toHaveURL`. Any other option, `indeterminate` or
 `useInnerText` included, is `INVALID_ARGUMENT`, in JavaScript too.
@@ -568,7 +631,8 @@ the opener is gone. `tabs()`, `newTab()`, `tab.activate()`, and
 - `addInitScript(source | { path } | fn)`, `addInitScript(fn, arg)`: runs
   before the page's own scripts; call it before `app.open`. `arg` is JSON.
 - `route(pattern, handler)`, `unroute(pattern)`: intercept requests, newest
-  route first; `route.request` has `url`, `method`, `headers`, `postData`.
+  route first; `pattern` is a URL pattern or `{ method, url }` for one method.
+  `route.request` has `url`, `method`, `headers`, `postData`.
   `route.fetch()` reads upstream without deciding the route and returns
   `{ url, status, headers, body(), text(), json() }`; redirects are not followed.
   Hand binary bodies on with `body()`, never `text()`.
@@ -622,8 +686,11 @@ the opener is gone. `tabs()`, `newTab()`, `tab.activate()`, and
 
 A `route`, `unroute`, or `waitForResponse` pattern is a glob string or
 `RegExp` matched against the full URL (`*` stays within one path segment,
-`**` crosses `/`, `?` is one character); a predicate function is
-`INVALID_ARGUMENT`.
+`**` crosses `/`, `?` is one character), or `{ method, url }` to match one
+HTTP method too, case-insensitively. A method matches exactly that method:
+`GET` does not answer `HEAD`. `unroute` removes routes
+registered with the same pattern, method included, rather than URL-matching
+them. A predicate function is `INVALID_ARGUMENT`.
 
 ## Habits
 
@@ -640,5 +707,5 @@ A `route`, `unroute`, or `waitForResponse` pattern is a glob string or
   enough for the slowest case (topic `agent` lists its model and budget
   limits), or a matcher with a longer `timeout` when a locator names the
   state exactly.
-- `await` every step call and `expect.poll`, else `STEP_NOT_AWAITED` at the line of the call.
+- `await` every step call, `expect.poll`, and `toPass`, else `STEP_NOT_AWAITED` at the line of the call.
 - Assert the fact a model produced with `toContain`, not its exact sentence.

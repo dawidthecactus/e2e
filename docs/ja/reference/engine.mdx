@@ -13,7 +13,9 @@ description: 観測、操作、ライフサイクルフック、フィクスチ�
 import { defineEngine, resolveExpression, type EngineHandle } from 'e2e/engine';
 import { connect } from './client.ts';
 
-export function kiosk(options: { host: string }): EngineHandle {
+export interface KioskEngine extends EngineHandle {}
+
+export function kiosk(options: { host: string }): KioskEngine {
   const client = connect(options.host);
   return defineEngine({
     name: 'kiosk',
@@ -72,6 +74,8 @@ export interface EngineHandle<Fixtures extends object = {}> extends Engine {
 
 `Fixtures` は、`{ browser: Browser }` のように、エンジンの [`fixtures`](#contributed-fixtures) が提供するものを型付けします。コンパイラーは、そこで名前を挙げた各フィクスチャに対して、同じ型を返すファクトリーが `fixtures` にあることを要求します。`screen`、`app`、`platform` は全セッションにあるため不要です。実行時の検査はありません。これにより、[`@e2e-dev/core`](/core) の `launch` は、型引数を手書きしなくてもセッションのフィクスチャを型付けできます。ファクトリーから `defineEngine<{ device: Device }>(...)` を返してください。
 
+ファクトリーからは、上の `KioskEngine` のように独自のインターフェースを返してください。型を推論する設定ファイルは、その型をあなたのパッケージ名で参照できます。`EngineHandle` をそのまま返すと、`declaration: true` を設定した pnpm プロジェクトが TS2883 で失敗することがあります。
+
 仕様が次のルールに違反すると、`defineEngine` は `INVALID_CONFIG` を投げます。
 
 | メンバー | 拒否する条件 |
@@ -85,9 +89,11 @@ export interface EngineHandle<Fixtures extends object = {}> extends Engine {
 | `observe`, `readStyle`, `locate`, `perform`, `performAt`, `prepare`, `finish`, `doctor`, `init`, `startAttempt`, `settleAttempt`, `endAttempt`, `dispose`, `validateApp` | 関数でない。 |
 | その他の最上位キー | オブジェクトリテラルでは `app` も含めて拒否。アプリはターゲットに宣言し、`validateApp` で検証します。クラスインスタンス自身のフィールドは検査しません。 |
 | `readStyle`, `perform`, `locate`, `performAt`, `keyboard` | `observe` なしで宣言。 |
-| `perform`, `actions` | 片方しかない。`actions` が空、種類が重複、または `LOCATOR_ACTION_KINDS` にない種類を含む。 |
+| `perform`, `actions` | 片方しかない。`actions` が空、種類が重複、または `KNOWN_LOCATOR_ACTION_KINDS` にない種類を含む。 |
 | `performAt`, `pointerActions` | 片方しかない。`pointerActions` が空、種類が重複、または `POINTER_ACTION_KINDS` にない種類を含む。 |
 | `tapModifiers` | 真偽値でない、または `perform` がないのに `true`。 |
+| `selectsDevice` | 真偽値でない、または `prepare` がないのに `true`。 |
+| `isolation` | `'attempt'` と `'worker'` 以外の値。 |
 | `keyboard`, `state`, `artifacts`, `session` | 未知のキーや関数でないメンバーがある。`keyboard` に `type` と `press` がない、`state` に `capture` と `restore` の両方がない、`artifacts` に `screenshot` がない、`startVideo` と `stopVideo` の片方しかない。 |
 | `secrets` | `secrets.get()` ハンドルの配列でない。 |
 | `fixtures` | オブジェクトでない、フィクスチャがファクトリー関数でない、名前が lowerCamelCase の識別子でない、または `agent`、`app`、`screen`、`platform`、`session` を隠してしまう。 |
@@ -113,8 +119,10 @@ export interface EngineHandle<Fixtures extends object = {}> extends Engine {
 | [`locate`](#capabilities) | メソッド |
 | [`performAt`, `pointerActions`](#pointer-actions) | メソッド、種類 |
 | [`tapModifiers`](#capabilities) | `boolean` |
+| [`selectsDevice`](#capabilities) | `boolean` |
 | [`keyboard`](#keyboard) | `EngineKeyboard` |
 | [`fixtures`](#contributed-fixtures) | ファクトリー |
+| [`isolation`](#fixture-isolation) | `'attempt' \| 'worker'` |
 | [`state`](#state) | `EngineStateCapability` |
 | [`artifacts`](#artifacts) | `EngineArtifacts` |
 | [`validateApp`](#app) | メソッド |
@@ -213,6 +221,12 @@ export interface Engine {
    * reaches the engine.
    */
   readonly tapModifiers?: boolean;
+  /**
+   * `prepare` binds the target to the device `EnginePrepareInfo.device`
+   * names, for `e2e run --device`. Without it the runner refuses the flag
+   * for the target before anything is prepared.
+   */
+  readonly selectsDevice?: boolean;
   /** capability: keyboard - requires observation. Input to whatever holds focus; see `EngineKeyboard`. */
   readonly keyboard?: EngineKeyboard;
   /**
@@ -221,6 +235,11 @@ export interface Engine {
    * capability names; `requires: ['<name>']` gates at selection.
    */
   readonly fixtures?: Readonly<Record<string, EngineFixtureFactory>>;
+  /**
+   * How long the state behind this engine's `fixtures`, `app`, and `screen`
+   * lives; see `EngineIsolation`. Defaults to `attempt`.
+   */
+  readonly isolation?: EngineIsolation;
   /** capability: state - opaque snapshot capture/restore for session reuse. */
   readonly state?: EngineStateCapability;
   /** capability: artifacts - screenshots under the attempt directory, and videos there or at a provider. */
@@ -351,6 +370,7 @@ export interface OperationContext {
 | `perform` + `actions` | `actions` | `observe` | 宣言した種類のノード操作と、プラットフォームの操作可否の検査。 |
 | `locate` | `location` | `observe` | `screen`、`Locator`、`expect(locator)`。 |
 | `tapModifiers: true` | - | `perform` | `tap`、`doubleTap`、`secondaryTap` の `modifiers`。 |
+| `selectsDevice: true` | - | `prepare` | `e2e run --device`。`prepare` が指定のデバイスを割り当てます。 |
 | `performAt` + `pointerActions` | `pointer` | `observe` | 対応するノードのないビューポート座標でのポインター操作。 |
 | `keyboard.{type,press,dismiss?}` | `keyboard` | `observe` | フォーカス中の対象への入力。 |
 | `fixtures.<name>` | `<name>` | - | エンジンが提供するフィクスチャ。 |
@@ -361,7 +381,7 @@ export interface OperationContext {
 
 #### ノードの描画プロパティ
 
-`readStyle(ref, properties, context)` は、アプリの状態を変えずに、指定したプロパティの計算済み CSS 文字列を返します。`computed-style` 機能には `observe` が必要で、`ref` は最新の観測から取得します。要求された各プロパティに文字列を返してください。ノードを解決できなくなっていれば、リトライ可能な `NODE_STALE` を投げます。ハーネスは、ツールに返す前に値をマスキングします。
+`readStyle(ref, properties, context)` は、アプリの状態を変えずに、指定したプロパティの計算済み CSS 文字列を返します。`computed-style` 機能には `observe` が必要で、`ref` は最新の観測から取得します。要求された各プロパティに文字列を返してください。ノードを解決できなくなっていれば、リトライ可能な `NODE_STALE` を投げます。ハーネスは、ツールに返す前に値を秘匿します。
 
 ```ts
 export type ComputedStyleProperty =
@@ -559,11 +579,21 @@ export interface EnginePrepareResult {
   readonly env?: Readonly<Record<string, string>>;
 }
 
+/** Who holds a target, for the lifecycle hooks: `prepare`, `init`, `finish`. */
+export interface EngineHostIdentity {
+  /**
+   * Set when a `launch()` host holds the target: a token no other host has.
+   * Hosts name their targets alike, so an engine that names what it holds
+   * after the target (a device session) adds this to keep hosts apart.
+   */
+  readonly hostId?: string | undefined;
+}
+
 /**
  * Facts handed to `prepare`, once per run and target in the runner process,
  * before any worker exists.
  */
-export interface EnginePrepareInfo {
+export interface EnginePrepareInfo extends EngineHostIdentity {
   /** The run id. */
   readonly runId: string;
   /** The target being prepared. */
@@ -598,6 +628,12 @@ export interface EnginePrepareInfo {
   /** Whether the run asked for a visible surface (`--headed`), as `EngineInitInfo` declares it. */
   readonly headed: boolean;
   /**
+   * The device `e2e run --device` names for this target, by name or id: the
+   * one to bind instead of the configured one. Only an engine that declares
+   * `selectsDevice` receives it.
+   */
+  readonly device?: string;
+  /**
    * Reports one line of progress. The runner streams it as a `notice` run
    * event, so it reaches the reporter and every host sink instead of being
    * written to a worker's stderr underneath the live status block.
@@ -608,7 +644,7 @@ export interface EnginePrepareInfo {
 
 #### `finish`
 
-ターゲットの全ワーカーが終了した後、ランナープロセスで実行・ターゲットごとに 1 回実行します。`prepare` が実行用に取得したものを解放してください。
+ターゲットの全ワーカーが終了した後、1 回の実行につきターゲットごとに 1 回、ランナープロセスで呼ばれます。`prepare` が実行用に取得したものを解放してください。
 
 ```ts
 async finish(info) {
@@ -620,7 +656,7 @@ async finish(info) {
 
 ```ts
 /** Handed to `finish`, once per run and target after the last worker is gone, with the cleanup budget of one hook. */
-export interface EngineFinishInfo extends EngineCleanupContext {
+export interface EngineFinishInfo extends EngineCleanupContext, EngineHostIdentity {
   /** The run id. */
   readonly runId: string;
   /** The target being finished. */
@@ -695,7 +731,7 @@ async init(info) {
 
 ```ts
 /** Run identity and harness-resolved facts handed to `init`, once per worker before the first step. */
-export interface EngineInitInfo {
+export interface EngineInitInfo extends EngineHostIdentity {
   /** The run id. */
   readonly runId: string;
   /** The target this worker serves. */
@@ -758,7 +794,7 @@ async startAttempt(context) {
 失敗やタイムアウトでは、`context.signal` が中断され、`endAttempt` が実行されます。
 
 <Warning>
-`resolveSecret` の値は、テキストとしてだけ保護されます。レポート、ログ、観測ではマスキングされ、試行のテキストダウンロードも書き換えますが、ページがセキュアなフィールド外に表示した値はスクリーンショットで隠されません。
+`resolveSecret` の値は、テキストとしてだけ保護されます。レポート、ログ、観測では秘匿され、試行のテキストダウンロードも書き換えますが、ページが機密フィールド外に表示した値はスクリーンショットでマスキングされません。
 </Warning>
 
 ```ts
@@ -872,7 +908,7 @@ async endAttempt(context) {
 
 `init` を実行しなかった場合も含め、ワーカーごとに 1 回実行します。
 
-`context.reuseSignal` がない、または中断済みなら、最終的なクリーンアップが必要です。有効なシグナルは、代替ワーカー用に実行所有のリソースを保持することを許可します。保持するエンジンは、フックが完了するまで許可の取り消しを監視する必要があります。最終終了、強制中断、親との切断で許可は取り消されます。クリーンアップの制限時間には、引き続き `context.signal` と `context.timeoutMs` を使います。
+`context.reuseSignal` がない、または中断済みなら、最終的なクリーンアップが必要です。シグナルが有効な場合は、実行が所有するリソースを、後を引き継ぐワーカーのために保持してかまいません。保持するエンジンは、フックが完了するまで、この許可が取り消されないかを監視する必要があります。最終終了、強制中断、親との切断で許可は取り消されます。クリーンアップの制限時間には、引き続き `context.signal` と `context.timeoutMs` を使います。
 
 クリーンアップは、その制限時間内で可能な限り行います。ワーカーの終了後や、再利用が許可された状態で dispose が完了した後のクリーンアップは、ランナーは保証しません。
 
@@ -978,7 +1014,14 @@ export interface EngineSnapshot {
   readonly treeUnavailable?: true;
   /** Masked pixels, when requested and producible; omitted otherwise. */
   readonly pixels?: ObservationPixels;
-  /** Regions masked in `pixels`; the harness checks it covers every secure node. */
+  /**
+   * Regions masked in the screenshot; the harness checks it covers every secure
+   * node. An engine asked for pixels (`pixels: true`) that cannot mask every
+   * secure node on screen omits `pixels` and still reports the regions it
+   * could mask, fewer than the secure nodes, so `toHaveScreenshot` fails with
+   * `POLICY_DENIED` and the agent reads `MASKING_UNPROVEN`, not a missing
+   * screenshot.
+   */
   readonly maskedRegionCount?: number;
 }
 
@@ -1039,6 +1082,7 @@ return {
 | `check` | - | 対応 | - |
 | `uncheck` | - | 対応 | - |
 | `focus` | - | 対応 | - |
+| `blur` | - | 対応 | - |
 | `hover` | - | 対応 | 対応 |
 | `scrollIntoView` | - | 対応 | - |
 | `selectOption` | `value` | 対応 | - |
@@ -1085,6 +1129,7 @@ export type LocatorAction =
         | 'uncheck'
         | 'clear'
         | 'focus'
+        | 'blur'
         | 'hover'
         | 'scrollIntoView';
     }
@@ -1093,6 +1138,11 @@ export type LocatorAction =
   | { readonly kind: 'press'; readonly key: Key }
   | { readonly kind: 'selectOption'; readonly value: SelectOption }
   | { readonly kind: 'setInputFiles'; readonly paths: readonly string[] }
+  | {
+      readonly kind: 'setInputFilePayloads';
+      /** In-memory files; an empty array clears the input. The protocol encodes bytes only on the wire. */
+      readonly files: readonly { readonly name: string; readonly mimeType: string; readonly buffer: Uint8Array }[];
+    }
   | { readonly kind: 'dragTo'; readonly target: NodeRef }
   | {
       readonly kind: 'swipe';
@@ -1103,7 +1153,7 @@ export type LocatorAction =
 /** Every action kind; what an engine declares in `actions`. */
 export type LocatorActionKind = LocatorAction['kind'];
 
-/** The closed list of action kinds, in contract order; the type is derived from it. */
+/** The locator action kinds of SPI v1. List newer kinds explicitly. Use KNOWN_LOCATOR_ACTION_KINDS to check an action kind. */
 export const LOCATOR_ACTION_KINDS = [
   'tap',
   'doubleTap',
@@ -1122,6 +1172,9 @@ export const LOCATOR_ACTION_KINDS = [
   'dragTo',
   'swipe',
 ] as const satisfies readonly LocatorActionKind[];
+
+/** Every action kind understood by this version of core. */
+export const KNOWN_LOCATOR_ACTION_KINDS = [...LOCATOR_ACTION_KINDS, 'blur', 'setInputFilePayloads'] as const satisfies readonly LocatorActionKind[];
 ```
 
 #### ポインター操作
@@ -1463,7 +1516,10 @@ export const RETRYABLE_ENGINE_ERROR_CODES: ReadonlySet<EngineErrorCode> = new Se
 
 #### 期限間際のタイムアウト
 
-待機中に一度検索または読み取りが完了した後、残り時間が 100 ms 未満、または完了済みの検索・読み取りの最長時間未満で次の処理を始め、その処理が `OPERATION_TIMEOUT` になった場合は、代わりに待機を終了します。
+検索または読み取りが `OPERATION_TIMEOUT` になっても、次の 2 つをどちらも満たす場合は、`ACTION_FAILED` にはならず、その時点で待機を終えます。
+
+- 同じ待機の中で、それより前に検索または読み取りが 1 回以上完了している。
+- その検索または読み取りを始めた時点で、待機中の呼び出しの期限までの残り時間が、100 ms 未満か、完了済みの検索・読み取りで最も長かった所要時間未満だった。
 
 | 待機中の呼び出し | 失敗コード |
 | --- | --- |
@@ -1884,7 +1940,7 @@ export interface VideoLink {
 - `startVideo` は `startAttempt` とセッション復元の後、起動の制限時間内で実行します。
 - `stopVideo` は `endAttempt` の前、クリーンアップの制限時間内で実行します。
 - 動画モードを明示した場合、`startVideo` の失敗は起動失敗、`stopVideo` の失敗はクリーンアップ失敗になります。デフォルトのモードでは、どちらが失敗しても通知せず動画を破棄します。
-- ランナーが保持する録画を決め、試行が保持しないファイルを削除します。
+- どの録画を残すかはランナーが決め、試行で残さないファイルは削除します。
 
 #### プロバイダーによる録画
 
@@ -1897,7 +1953,7 @@ async stopVideo(context) {
 },
 ```
 
-- `isProviderRecording(value)` は、プロバイダーの `record` が返した値が録画かを判定します。解析可能な `startedAt` と `stop` が必要です。保持する前に確認し、不正な録画が停止時ではなく開始時に、名前付きで失敗するようにしてください。
+- `isProviderRecording(value)` は、プロバイダーの `record` が返した値が録画かを判定します。解析可能な `startedAt` と `stop` が必要です。録画を保持する前にこれで確認し、不正な録画は停止時ではなく開始時に、プロバイダー名を示すエラーで失敗させてください。
 - `stopProviderRecording` は、試行の `video` ディレクトリを作成し、それを渡して `stop` を呼びます。ファイルはそのディレクトリに実在する単純なファイル名、リンクはメディアタイプ付きの `http(s)` URL である必要があります。
 - `stopVideo` が返せるよう、`{ path: 'video/<file>', startedAt }` または `{ url, mediaType, startedAt }` を返します。
 - target 引数の型は `ProviderRecordingTarget` としてエクスポートします。
@@ -1959,7 +2015,7 @@ export function stopProviderRecording(
 ): Promise<VideoSegment>;
 ```
 
-#### マスキング
+#### 秘匿
 
 - 動画はマスキングされず、`redaction: 'incomplete'` が付きます。
 - エンジンが添付する `download` は、アプリが返したバイト列です。セッションがシークレットの値を把握している場合、ランナーはテキスト形式（`.txt`、`.csv`、`.json`、`.html`）をシークレットの台帳を通して書き換え、`complete` を付けます。
@@ -1967,7 +2023,7 @@ export function stopProviderRecording(
 
 ### エンジンが提供するフィクスチャ
 
-エンジンは `fixtures` を通して、名前付きの操作インターフェースをテストのフィクスチャに追加します。各キーがフィクスチャ名と機能名になります。
+エンジンは `fixtures` を通して、名前付きの操作インターフェースをテストのフィクスチャに追加します。各キーがフィクスチャ名と機能名になります。テストから見ると、`app` や `screen` と並ぶ[組み込みフィクスチャ](/reference/test#fixtures)です。
 
 ```ts title="src/index.ts"
 fixtures: {
@@ -2075,6 +2131,38 @@ export interface EngineFixtureContext {
 }
 ```
 
+#### フィクスチャの分離
+
+`isolation` は、ある試行で行った操作の結果が次の試行に残るかどうかを宣言します。エンジンが支える組み込みフィクスチャ、つまりエンジンが提供するフィクスチャ、`app`、`screen` のスコープを決めます。
+
+```ts
+defineEngine({ name: 'device', /* ... */ isolation: 'worker' });
+```
+
+| 値 | 意味 | フィクスチャのスコープ |
+| --- | --- | --- |
+| `'attempt'`（デフォルト） | `startAttempt` が、ブラウザコンテキストのような新しい操作対象を試行ごとに用意します。 | テストフィクスチャ。`beforeAll` と `afterAll` からは読み取れません。 |
+| `'worker'` | 試行で行った操作の結果が残ります。デバイスは権限とインストール済みアプリを保持します。 | [ワーカーフィクスチャ](/reference/test#worker-fixtures)。`beforeAll`、`afterAll`、ワーカーフィクスチャが受け取ります。 |
+
+`@e2e-dev/mobile` は `'worker'` を宣言しています。そのようなエンジンでは、次のように動作します。
+
+- スイートのフックは、一通り実行するたびに、その回専用の短い試行（`startAttempt`、続いて `endAttempt`）の中で実行します。ワーカー終了時のワーカーフィクスチャの後処理も同様です。`startAttempt` では何も起動しないように実装してください。
+- 直列実行グループ、または `e2e mcp` セッションが実行するテストでは、フックはすでに開いている試行の上で実行します。エンジンが同時に実行する試行は 1 つだけです。
+- 試行を開けない場合や、実行が中断された場合、フックはそれらの組み込みフィクスチャなしで実行します。[`beforeAll`](/reference/test#beforeall) を参照してください。
+
+```ts
+/**
+ * What one attempt on an engine leaves for the next. `attempt`: nothing,
+ * `startAttempt` gives each attempt a fresh surface (a browser context), so
+ * the engine's fixtures, `app`, and `screen` are test fixtures, and a suite
+ * hook cannot use them. `worker`: what an attempt does stays (a device keeps
+ * permissions, keychain, and installed apps), so they are worker fixtures,
+ * which `beforeAll`, `afterAll`, and worker-scoped `test.extend()` fixtures
+ * see; a suite hook runs in a short attempt of its own for them.
+ */
+export type EngineIsolation = 'attempt' | 'worker';
+```
+
 #### 操作を宣言する
 
 `context.fixture(name, surface, operations)` は、どのメソッドをステップとして記録するか宣言します。各操作には次を指定します。
@@ -2126,7 +2214,7 @@ return context.fixture('printer', printer, { print: { kind: 'resource' } });
 
 ### エクスポートされる名前
 
-`EngineCleanupContext`、`EngineDisposeContext`、`OperationContext`、`TextPattern`、`SemanticQuery`、`LocatorExpression`、`NodeRef`、`SemanticNode`、`ViewportPoint`、`ViewportSize`、`ObservationPixels`、`LocatorAction`、`LocatorActionKind`、`PointerAction`、`PointerActionKind`、`ScrollDirection`、`Momentum`、`SelectOption`、`Key`、`KeyModifier`、`KeyName`、`ParsedKey`、`ENGINE_SPI_VERSION`、`LOCATOR_ACTION_KINDS`、`POINTER_ACTION_KINDS`、`KEY_MODIFIERS`、`KEY_NAMES`、`parseKey`、`ENGINE_ERROR_CODES`、`RETRYABLE_ENGINE_ERROR_CODES`、`Secret`、`isSecret`、`TextMatch`、`JsonValue`、`JsonValueRules`、`ResolveExpressionOptions`、`PollConditionOptions`、`WithoutUndefined`、`FixtureOperation`、`OBSERVED_NAME_LIMIT`、`OBSERVED_TEXT_LIMIT` は `e2e/engine` からエクスポートされます。[エンジンプロトコル](/reference/engine-protocol)の `connectEngine`、`serveEngine`、`describeEngine`、`spawnTransport`、`socketTransport`、`loopbackTransport`、`ENGINE_METHODS`、`ENGINE_PROTOCOL_VERSION` と、それぞれの型も含まれます。
+`EngineCleanupContext`、`EngineDisposeContext`、`OperationContext`、`TextPattern`、`SemanticQuery`、`LocatorExpression`、`NodeRef`、`SemanticNode`、`ViewportPoint`、`ViewportSize`、`ObservationPixels`、`LocatorAction`、`LocatorActionKind`、`PointerAction`、`PointerActionKind`、`ScrollDirection`、`Momentum`、`SelectOption`、`Key`、`KeyModifier`、`KeyName`、`ParsedKey`、`ENGINE_SPI_VERSION`、`LOCATOR_ACTION_KINDS`、`KNOWN_LOCATOR_ACTION_KINDS`、`POINTER_ACTION_KINDS`、`KEY_MODIFIERS`、`KEY_NAMES`、`parseKey`、`ENGINE_ERROR_CODES`、`RETRYABLE_ENGINE_ERROR_CODES`、`Secret`、`isSecret`、`TextMatch`、`JsonValue`、`JsonValueRules`、`ResolveExpressionOptions`、`PollConditionOptions`、`WithoutUndefined`、`FixtureOperation`、`EngineIsolation`、`OBSERVED_NAME_LIMIT`、`OBSERVED_TEXT_LIMIT` は `e2e/engine` からエクスポートされます。[エンジンプロトコル](/reference/engine-protocol)の `connectEngine`、`serveEngine`、`describeEngine`、`spawnTransport`、`socketTransport`、`loopbackTransport`、`ENGINE_METHODS`、`ENGINE_PROTOCOL_VERSION` と、それぞれの型も含まれます。
 
 ### `SemanticNode`
 
@@ -2163,11 +2251,17 @@ export interface SemanticNode {
   /**
    * Boolean states the platform reports. `pressed` is a toggle button's
    * pressed state; `secure` marks a field whose value is never observed.
+   * `readonly` is present only on a node that has a read-only state, as
+   * Playwright's `getReadonly` decides on the web (an input, textarea, or
+   * select by its `readonly` attribute, an element whose ARIA role takes
+   * `aria-readonly` by that attribute, any other editing host `false`), and
+   * only where the platform knows, as Android does: absent means the node has
+   * no read-only state to read, not `false`.
    */
   readonly states?: Readonly<
     Partial<
       Record<
-        'checked' | 'disabled' | 'selected' | 'expanded' | 'pressed' | 'focused' | 'hidden' | 'secure',
+        'checked' | 'disabled' | 'selected' | 'expanded' | 'pressed' | 'focused' | 'hidden' | 'secure' | 'readonly',
         boolean
       >
     >
@@ -2223,10 +2317,10 @@ export interface SemanticNode {
 | 定数 | 値 | 制限するフィールド |
 | --- | --- | --- |
 | `OBSERVED_NAME_LIMIT` | 256 | `name` |
-| `OBSERVED_TEXT_LIMIT` | 512 | `text` と、エンジンが省略する `value` や `selection` |
+| `OBSERVED_TEXT_LIMIT` | 512 | `text` と、エンジンが切り詰める `value` や `selection` |
 
-- 観測フィールドを省略するエンジンは、上限ちょうどで切ります。上限と同じ長さのフィールドは省略された可能性があります。短いもの、またはエンジンが全体を残した長いものは完全です。
-- 先頭を残し、末尾を切ってください。ランナーは、上限ちょうどのフィールド末尾に残ったシークレットの先頭部分もマスキングします。値全体の一致では見つけられない部分です。
+- 観測フィールドを切り詰めるエンジンは、上限ちょうどで切ります。上限と同じ長さのフィールドは切り詰められた可能性があります。短いもの、またはエンジンが全体を残した長いものは完全です。
+- 先頭を残し、末尾を切ってください。ランナーは、上限ちょうどのフィールド末尾に残ったシークレットの先頭部分も秘匿します。値全体の一致では見つけられない部分です。
 - 単一ノードの読み取りに上限はなく、常に完全な値を返します。
 
 ### 検索

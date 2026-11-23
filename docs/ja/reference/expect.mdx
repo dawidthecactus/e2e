@@ -22,17 +22,17 @@ test('checkout summary', async ({ screen }) => {
 
 | 呼び出し | 戻り値 |
 | --- | --- |
-| [`expect(locator)`](#locator-matchers) | `AsyncExpectation` |
-| [`expect(screen)`](#screenshot-matchers) | `ScreenExpectation` |
+| [`expect(locator, message?)`](#locator-matchers) | `AsyncExpectation` |
+| [`expect(screen, message?)`](#screenshot-matchers) | `ScreenExpectation` |
 | [`expect(fixture)`](#browser-matchers) | エンジンのマッチャー群 |
 | [`expect(value, message?)`](#value-matchers) | `ValueExpectation<T>` |
 | [`expect.poll(read, options?)`](#polling-a-value) | `PollExpectation<T>` |
-| [`expect.soft(actual)`](#soft-assertions) | 同じマッチャー群。失敗は保持 |
+| [`expect.soft(actual, message?)`](#soft-assertions) | 同じマッチャー群。失敗は保持 |
 | [`expect.any(Class)` など](#asymmetric-matchers) | `AsymmetricMatcher` |
 
 `expect` は、渡された引数の種類に応じて使うマッチャーを決めます。
 
-- エンジンのフィクスチャは、`expect(browser).toHaveURL()` のようなマッチャーを提供できます。そのフィクスチャは `Expectable<E>` です。エンジンが [`expectable`](/reference/engine#contributed-fixtures) を通じてマッチャー群 `E` を付けており、`expect(fixture)` はそれを返します。
+- エンジンが提供する組み込みフィクスチャは、`expect(browser).toHaveURL()` のようなマッチャーを提供できます。そのフィクスチャは `Expectable<E>` です。エンジンが [`expectable`](/reference/engine#contributed-fixtures) を通じてマッチャー群 `E` を付けており、`expect(fixture)` はそれを返します。
 - それ以外の引数には、Promise も含めて値のマッチャーを使います。Promise の結果を検証するには、先に await してから `expect` に渡してください。
 
 宣言は[型](#types)にあります。
@@ -41,6 +41,14 @@ test('checkout summary', async ({ screen }) => {
 
 `expect(locator)` は `AsyncExpectation` を返します。各マッチャーは条件が成立するかタイムアウトするまでポーリングします。[厳密性](#strictness)、[テキストの照合](#text-matching)、[機密フィールド](#secure-fields)など、[動作](#behavior)で説明するルールに従います。オプションは [`AsyncExpectation`](#asyncexpectation-and-textmatcheroptions) にあります。
 
+`expect(locator, message)` と `expect.soft(locator, message)` の第 2 引数には、何を確認しているかを書きます。このメッセージは、以下のマッチャーのアサーション失敗（`.not` を含む）で、マッチャーとロケーターの前に付きます。ロケーターが複数のノードに一致したときの `LOCATOR_AMBIGUOUS` エラーにも付きます。無効なオプションや拒否された読み取りによる失敗には付きません。`expect(screen, message)` も同じようにメッセージを受け取ります。
+
+```ts
+await expect(screen.getByTestId('cart-empty'), 'the cart is empty').toBeVisible();
+// ASSERTION_FAILED: the cart is empty: expect.toBeVisible failed
+// locator: getByTestId("cart-empty")
+```
+
 | マッチャー | 説明 |
 | --- | --- |
 | [`toBeVisible`](#tobevisible-and-tobehidden) | 表示されるまで待機 |
@@ -48,6 +56,7 @@ test('checkout summary', async ({ screen }) => {
 | [`toBeAttached`](#tobeattached) | 一致するノードが 1 つ存在するまで待機 |
 | [`toBeEnabled`](#tobeenabled-and-tobedisabled) | 有効になるまで待機 |
 | [`toBeDisabled`](#tobeenabled-and-tobedisabled) | 無効になるまで待機 |
+| [`toBeEditable`](#tobeeditable) | 有効で読み取り専用でないコントロールになるまで待機 |
 | [`toBeChecked`](#tobechecked-tobeselected-and-tobeexpanded) | チェックされるまで待機 |
 | [`toBeSelected`](#tobechecked-tobeselected-and-tobeexpanded) | 選択されるまで待機 |
 | [`toBeExpanded`](#tobechecked-tobeselected-and-tobeexpanded) | 展開されるまで待機 |
@@ -95,6 +104,21 @@ await expect(screen.getByRole('button', 'Pay')).toBeEnabled({ enabled: false });
 
 - `<fieldset disabled>` 内のコントロールは、その fieldset の最初の `<legend>` 内にない限り無効です。
 - 祖先の `aria-disabled="true"` は、その下のウィジェットを無効にします。途中に `aria-disabled="false"` があると、この継承を止めます。
+
+#### `toBeEditable`
+
+コントロールが有効で、読み取り専用でなくなるまで待ちます。
+
+```ts
+await expect(screen.getByLabel('Email')).toBeEditable();
+await expect(screen.getByLabel('Order id')).toBeEditable({ editable: false }); // read-only or disabled
+```
+
+- 読み取り専用かどうかはエンジンが報告する状態です。Web エンジンはネイティブコントロールと `aria-readonly` について Playwright のルールに従い、ロールは e2e のもの、無効状態は `toBeEnabled()` が報告するものを使います。`input`、`textarea`、`select` は自身の `readonly` 属性だけを読みます（値は問いません）。`aria-readonly` を取るロール（`textbox`、`searchbox`、`combobox`、`listbox`、`checkbox`、`switch`、`slider`、`spinbutton`、`gridcell` など）の要素は `aria-readonly="true"` を読みます（大文字小文字は問いません）。編集ホストは ARIA ロール（明示したもの、またはタグのロール。グリッド内の `td` は `gridcell`）でだけこれを読みます。ただの `<div contenteditable>` にはロールがありません。それ以外の編集ホストとその中の要素は読み取り専用になりません。
+- 無効なノードも編集可能ではありません。無効の判定は [`toBeEnabled`](#tobeenabled-and-tobedisabled) と同じです。
+- ボタンなどそれ以外のノードには読み取り専用の状態がありません。否定してもマッチャーは失敗し、失敗メッセージにそのことが表示されます。
+- デバイスでは、プラットフォームがテキストを受け付けるかどうかを報告する場合（Android など）だけ、テキストフィールドに読み取り専用の状態があります。iOS は報告しないので、iOS のフィールドでは推測で成功させずにマッチャーが失敗します。
+- この状態は、`e2e` 0.25.0 を必要とする `@e2e-dev/web` と `@e2e-dev/mobile` のリリースから報告されます。古いエンジンではすべてのノードが `no read-only state` で失敗するので、`e2e` と一緒にエンジンも更新してください。
 
 #### `toBeChecked`、`toBeSelected`、`toBeExpanded`
 
@@ -227,7 +251,7 @@ await expect(screen).toHaveScreenshot('feed.png', { mask: [screen.getByTestId('t
 | --- | --- |
 | `INVALID_ARGUMENT` | 画面を読み取る前に検証します。名前にパス区切り文字がある、受け付けないオプション（Playwright の `fullPage`、`animations`、`clip`）がある、値が範囲外、フレームに限定した screen に `expect` を使った場合。フレーム内ではロケーターを比較してください |
 | `ASSERTION_FAILED` | 上の表のとおり、保存画像がない、異なる、または同じ実行中に保存された場合 |
-| `POLICY_DENIED` | 画面上のすべての機密フィールドをマスクしたとエンジンが確認できない場合 |
+| `POLICY_DENIED` | 画面上のすべての機密フィールドをマスキングしたとエンジンが確認できない場合 |
 
 #### スクリーンショットのオプション
 
@@ -448,7 +472,7 @@ expect(created, 'the company exists through the API').toBeTruthy();
 // ASSERTION_FAILED: the company exists through the API: expected undefined to be truthy
 ```
 
-メッセージを受け付けるのは値の検証だけです。ロケーターや `browser` の検証では、失敗時にすでにロケーターとマッチャーの名前が表示されます。
+[ロケーター](#locator-matchers)や `screen` の検証も、同じようにメッセージを受け取ります。`browser` の検証はメッセージを受け取りません。失敗にはマッチャーの名前が表示されます。
 
 #### 含まれない機能
 
@@ -484,7 +508,7 @@ expect(response).toHaveProperty('body.total', expect.any(Number));
 
 ### ソフトアサーション
 
-`expect.soft(actual)` は `expect(actual)` と同じ引数を受け取り、同じマッチャーを返します。ソフトマッチャーが失敗しても例外はスローしません。失敗は実行中の試行に保持し、テスト本体を続行します。
+`expect.soft(actual, message?)` は `expect(actual, message?)` と同じ引数を受け取り、同じマッチャーを返します。ソフトマッチャーが失敗しても例外はスローしません。失敗は実行中の試行に保持し、テスト本体を続行します。
 
 ```ts
 test('checkout summary', async ({ agent, screen }) => {
@@ -568,7 +592,7 @@ last: expected "running" not to be "running"
 すべてのポーリングを await してください。ポーリングは、それを開始したフェーズに属します。フェーズは、テスト本体（フィクスチャと `beforeEach` フックを含む）、個々の `afterEach` フックまたはフィクスチャの後処理、個々の `beforeAll` または `afterAll` フックです。ポーリングが動いている間にフェーズが戻ると、そのポーリングをキャンセルし、呼び出し行を指す `STEP_NOT_AWAITED` でフェーズを失敗にします。待てば成功したかどうかは問いません。テスト本体がすでに例外をスローしていれば、元のエラーを維持し、このエラーは `secondaryErrors` に記録します。スイートのフックでは `HOOK_FAILED` として報告します。
 </Note>
 
-ポーリングが後続のテストを失敗させることはありません。タイムアウト後のテスト本体など、フェーズが終了後も残した処理がポーリングを開始した場合、最初の読み取り前にキャンセルします。
+ポーリングが後続のテストを失敗させることはありません。フェーズの終了後も動き続けている処理（タイムアウト後のテスト本体など）が開始したポーリングは、最初の読み取りの前にキャンセルされます。
 
 ## 動作
 
@@ -580,7 +604,7 @@ last: expected "running" not to be "running"
 | --- | --- |
 | デフォルトタイムアウト | [`config.assertionTimeout`](/reference/config#assertiontimeout) |
 | 上書き | すべてのロケーターと `browser` のマッチャーで、ミリ秒単位の `{ timeout }` |
-| 読み取り | 開始から 0、20、50 ms、その後は 100 ms ごと |
+| 読み取り | 開始から 0、20、50 ms、その後は開始から 100 ms ごと |
 | 未知のオプション | `INVALID_ARGUMENT`。[オプションの検証](#option-validation)を参照 |
 | 失敗コード | `ASSERTION_FAILED`、終了コード 1 |
 
@@ -638,16 +662,16 @@ type NotAny<T> = 0 extends 1 & T ? never : T;
 
 /** The `expect(actual)` call: a locator, `screen`, an engine fixture, or a value, told apart by the argument. */
 export interface ExpectCall {
-  <L extends Locator>(actual: NotAny<L>): AsyncExpectation;
-  <S extends Screen>(actual: NotAny<S>): ScreenExpectation;
+  <L extends Locator>(actual: NotAny<L>, message?: string): AsyncExpectation;
+  <S extends Screen>(actual: NotAny<S>, message?: string): ScreenExpectation;
   <E extends object>(actual: Expectable<E>): E;
   <T>(actual: T, message?: string): ValueExpectation<T>;
 }
 
 /** The `expect.soft(actual)` call: `expect(actual)` whose failures are kept instead of thrown. */
 export interface SoftExpectCall {
-  <L extends Locator>(actual: NotAny<L>): AsyncExpectation;
-  <S extends Screen>(actual: NotAny<S>): ScreenExpectation;
+  <L extends Locator>(actual: NotAny<L>, message?: string): AsyncExpectation;
+  <S extends Screen>(actual: NotAny<S>, message?: string): ScreenExpectation;
   <E extends object>(actual: Expectable<E>): E;
   <T>(actual: T, message?: string): SoftValueExpectation<T>;
 }
@@ -687,6 +711,8 @@ export interface AsyncExpectation {
   toBeEnabled(options?: { enabled?: boolean; timeout?: number }): Promise<void>;
   /** Waits for disabled state. */
   toBeDisabled(options?: { timeout?: number }): Promise<void>;
+  /** Waits for an enabled control that is not read-only; `editable: false` waits for a disabled or read-only one. A node with no read-only state, a button included, fails either way. */
+  toBeEditable(options?: { editable?: boolean; timeout?: number }): Promise<void>;
   /** Waits for checked state; `checked: false` waits for unchecked state. */
   toBeChecked(options?: { checked?: boolean; timeout?: number }): Promise<void>;
   /** Waits for selected state. */

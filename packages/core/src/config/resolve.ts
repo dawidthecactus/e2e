@@ -11,9 +11,10 @@ import { didYouMean } from '../internal/suggest.ts';
 import { isRecordingMode, legacyTraceSpelling, RECORDING_MODES, type RecordingKind, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { isStepExecutor } from '../agent/executor.ts';
 import { compileGlob, compileGlobList, literalPrefix } from '../internal/globs.ts';
+import { isPlainObject, rejectUnknownKeys } from '../internal/options.ts';
 import { isRecord } from './command.ts';
-import { boundedInt, describeValue, timerMs } from './validate.ts';
-import type { ArtifactStore, ArtifactsConfig, CacheMode, ModelInstance, SecretProvider, SecretPurpose, RecordingMode, CacheStore, ProjectConfig } from '../types.ts';
+import { boundedInt, checkIntervals, DEFAULT_PASS_OPTIONS, describeValue, timerMs } from './validate.ts';
+import type { ArtifactStore, ArtifactsConfig, CacheMode, ModelInstance, PassOptions, SecretProvider, SecretPurpose, RecordingMode, CacheStore, ProjectConfig } from '../types.ts';
 import { isModelInstance, resolveAgentConfig, runLimits, type ResolvedAgentConfig, type ResolvedLimits } from './agent.ts';
 import { bindTargets, digestTargets, resolveTargets, TARGET_NAME_PATTERN, type PortAssignments, type ResolvedTarget } from './targets.ts';
 import { credentialNamed, credentialSecretName, envName, isSecretValue, secretValueProblem } from './secrets.ts';
@@ -51,6 +52,7 @@ export interface ResolvedConfig {
   readonly launchTimeout: number;
   readonly actionTimeout: number;
   readonly assertionTimeout: number;
+  readonly toPass: Readonly<Required<PassOptions>>;
   readonly cleanupTimeout: number;
   readonly retries: number;
   readonly failOnSkippedFailure: boolean;
@@ -148,6 +150,7 @@ const TOP_LEVEL_KEYS = new Set([
   'launchTimeout',
   'actionTimeout',
   'assertionTimeout',
+  'toPass',
   'cleanupTimeout',
   'retries',
   'failOnSkippedFailure',
@@ -252,6 +255,7 @@ export function resolveProjectConfig(
   const launchTimeout = timerMs(raw.launchTimeout, 'launchTimeout') ?? 60_000;
   const configActionTimeout = timerMs(raw.actionTimeout, 'actionTimeout');
   const configAssertionTimeout = timerMs(raw.assertionTimeout, 'assertionTimeout');
+  const toPass = resolvePassOptions(raw.toPass);
   const cleanupTimeout = timerMs(raw.cleanupTimeout, 'cleanupTimeout') ?? 30_000;
   const maxDuration = timerMs(raw.maxDuration, 'maxDuration');
 
@@ -298,6 +302,7 @@ export function resolveProjectConfig(
     launchTimeout,
     actionTimeout,
     assertionTimeout,
+    toPass,
     cleanupTimeout,
     retries,
     failOnSkippedFailure,
@@ -317,6 +322,24 @@ export function resolveProjectConfig(
     configDigest: computeConfigDigest(raw, projectId, targets),
   };
   return resolved;
+}
+
+/** Validates the `toPass` config and resolves its defaults before any test runs. */
+function resolvePassOptions(value: PassOptions | undefined): Readonly<Required<PassOptions>> {
+  if (value === undefined) return DEFAULT_PASS_OPTIONS;
+  if (!isPlainObject(value)) {
+    throw new ConfigurationError('INVALID_CONFIG', `toPass must be an object, got ${describeValue(value)}`);
+  }
+  rejectUnknownKeys('toPass', value, ['timeout', 'intervals']);
+
+  const { timeout, intervals } = value;
+  const timeoutMs = timeout === 0 ? 0 : timerMs(timeout, 'toPass.timeout');
+  checkIntervals('toPass.intervals', intervals);
+
+  return {
+    timeout: timeoutMs ?? DEFAULT_PASS_OPTIONS.timeout,
+    intervals: intervals === undefined ? DEFAULT_PASS_OPTIONS.intervals : [...intervals],
+  };
 }
 
 /**
@@ -466,6 +489,26 @@ function nearestExisting(target: string): string | undefined {
   }
 }
 
+const DEFAULT_OUTPUT_DIR = '.e2e';
+
+/**
+ * Resolves the results directory (`--output` over the config's `output`,
+ * defaulting to `.e2e`) from `projectRoot` without validating the rest of
+ * the project config.
+ */
+export function resolveOutputDir(
+  configured: unknown,
+  flag: string | undefined,
+  projectRoot: string,
+): string {
+  const where = flag === undefined ? 'output' : '--output';
+  const value: unknown = flag ?? configured;
+  if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} must be a non-empty path relative to the project root, got ${describeValue(value)}`);
+  }
+  return path.resolve(projectRoot, (value as string | undefined) ?? DEFAULT_OUTPUT_DIR);
+}
+
 /**
  * Resolves the results directory, `--output` over the config's `output`,
  * from the project root. A run clears `<output>/results` and writes over
@@ -488,11 +531,8 @@ function resolveOutput(
 ): string {
   const where = flag === undefined ? 'output' : '--output';
   const value: unknown = flag ?? configured;
-  if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
-    throw new ConfigurationError('INVALID_CONFIG', `${where} must be a non-empty path relative to the project root, got ${describeValue(value)}`);
-  }
-  const output = path.resolve(projectRoot, (value as string | undefined) ?? '.e2e');
-  const named = value === undefined ? `${where} ".e2e" (the default)` : `${where} ${JSON.stringify(value)}`;
+  const output = resolveOutputDir(configured, flag, projectRoot);
+  const named = value === undefined ? `${where} "${DEFAULT_OUTPUT_DIR}" (the default)` : `${where} ${JSON.stringify(value)}`;
   const refuse = (reason: string): never => {
     throw new ConfigurationError('INVALID_CONFIG', `${named} ${reason}`);
   };

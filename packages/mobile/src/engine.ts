@@ -18,14 +18,23 @@ import type { MobileFixtures } from './fixtures.ts';
 
 const surfaces = new WeakMap<EngineHandle, AgentDeviceSurface>();
 
+/**
+ * The handle `mobile()` returns. Declared here so a config's inferred type
+ * names this package: a project sees `@e2e-dev/core` only through its
+ * dependencies, and TypeScript cannot write that path in a declaration.
+ */
+export interface MobileEngine extends EngineHandle<MobileFixtures> {}
+
 /** Assembles the manifest for one surface. Exported for tests that script the client. */
-export function buildEngine(surface: AgentDeviceSurface): EngineHandle<MobileFixtures> {
+export function buildEngine(surface: AgentDeviceSurface): MobileEngine {
   const handle = defineEngine<MobileFixtures>({
     name: 'mobile',
     version: ownVersion(),
     spiVersion: 1,
     platform: surface.options.platform,
     ...(surface.pool.size === undefined ? {} : { workers: surface.pool.size }),
+    // `e2e run --device` names the device `prepare` binds; see DevicePool.prepare.
+    ...(surface.pool.selectsDevice ? { selectsDevice: true } : {}),
     prepare: (info) => surface.pool.prepare(info),
     finish: (info) => surface.pool.finish(info),
     doctor: (info) => surface.doctor(info),
@@ -66,13 +75,17 @@ export function buildEngine(surface: AgentDeviceSurface): EngineHandle<MobileFix
     fixtures: {
       device: (context) => createDeviceFixture(surface, context),
     },
+    // A device keeps permissions, keychain, and installed apps from one
+    // attempt to the next, so `device`, `app`, and `screen` are worker
+    // fixtures: `beforeAll` and `afterAll` can drive them.
+    isolation: 'worker',
   });
   surfaces.set(handle, surface);
   return handle;
 }
 
 /** Creates one agent-device engine: one device session per worker; a test launches the pinned app with `app.open()`. */
-export function mobile(options: MobileOptions): EngineHandle<MobileFixtures> {
+export function mobile(options: MobileOptions): MobileEngine {
   // The type requires it; `e2e mcp`'s `open_session {engine}` calls this with the JSON an agent wrote.
   const platform: unknown = (options as Partial<MobileOptions> | undefined)?.platform;
   if (platform !== 'ios' && platform !== 'android') {
