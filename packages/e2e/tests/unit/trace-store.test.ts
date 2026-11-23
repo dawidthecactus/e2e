@@ -8,7 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { instructionDigest, paramsDigest } from '@e2e-dev/core/lib/cache/identity';
 import { holdsFileLock, withFileLock } from '@e2e-dev/core/lib/cache/file-lock';
-import { FileCacheStore, MAX_CACHE_WIRE_BYTES, recordingFileName } from '@e2e-dev/core/lib/cache/store';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '@e2e-dev/core/lib/cache/store';
 import { MAX_TRACE_TEST_ID_CHARS, type ActionTrace, type TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
 import { bound } from '@e2e-dev/core/lib/internal/text';
 import { MAX_PARAMS_DEPTH, validateJsonValue } from '@e2e-dev/core/lib/internal/json-value';
@@ -303,6 +303,15 @@ describe('FileCacheStore', () => {
     expect((await store.read(KEY, step('web', { testId: redacted }))).status).toBe('miss');
   });
 
+  it('names the file a step\'s key is in, under whichever spelling it was filed', async () => {
+    const { store } = await makeStore();
+    const spelled = 'tests/login.e2e.ts::logs in as alice@example.com';
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: 'tests/login.e2e.ts::logs in as <secret:email>' }) }));
+    expect(await store.recordingFile(KEY, spelled)).toBe('login-logs-in-as-secret-email.yml');
+    // A key recorded nowhere: the file the test's recordings would go to.
+    expect(await store.recordingFile(OTHER_KEY, spelled)).toBe('login-logs-in-as-alice-example-com.yml');
+  });
+
   it('evicts a recording where a read found it under the redacted id', async () => {
     const { directory, store } = await makeStore();
     const spelled = step('web', { testId: 'tests/login.e2e.ts::logs in as alice@example.com' });
@@ -320,7 +329,7 @@ describe('FileCacheStore', () => {
     // A recording keeps the test id cut to its bound, and the store names the file from that.
     await store.write(KEY, payload('web', { recordedFor: step('web', { testId: bound(longId, MAX_TRACE_TEST_ID_CHARS) }) }));
     const written = (await readdir(directory)).find((name) => name.endsWith('.yml'));
-    expect(await recordingFileName(directory, longId)).toBe(written);
+    expect(await store.recordingFile(KEY, longId)).toBe(written);
   });
 
   it('puts a step added to the middle of a test in the middle of its file', async () => {

@@ -11,7 +11,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { recordingFileName } from '@e2e-dev/core/lib/cache/store';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '@e2e-dev/core/lib/cache/store';
 import { displayPath } from '@e2e-dev/core/lib/internal/paths';
 import { resultSegment } from '@e2e-dev/core/lib/run/artifacts';
 import type { Report1Document, ReportExplore, ReportResult } from './build.ts';
@@ -71,6 +71,7 @@ export async function writeTracePages(report: Report1Document, traced: ReadonlyS
     }
   };
   const pages = new Map<string, string>();
+  const store = options.cacheDir === undefined ? undefined : new FileCacheStore({ directory: options.cacheDir, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
   for (const result of tracedResults(report, traced)) {
     const dir = resultSegment(result);
     const file = path.join(options.resultsRoot, dir, TRACE_PAGE);
@@ -78,12 +79,27 @@ export async function writeTracePages(report: Report1Document, traced: ReadonlyS
       artifactsDir: relative(options.resultsRoot),
       pageDir: dir,
       readArtifact,
-      ...(options.cacheDir === undefined
-        ? {}
-        : { cacheFile: displayPath(options.projectRoot, path.join(options.cacheDir, await recordingFileName(options.cacheDir, result.testId))) }),
+      ...(store === undefined || options.cacheDir === undefined ? {} : { cacheFiles: await cacheFilesOf(result, store, options.cacheDir, options.projectRoot) }),
     });
     await writeTextReport(file, page);
     pages.set(result.id, relative(file));
   }
   return pages;
+}
+
+/**
+ * The recording file of each cache key the result's steps name, as the
+ * reader should see it: found by the key, since a test can file steps
+ * under more than one spelling of its id.
+ */
+async function cacheFilesOf(result: ReportResult, store: FileCacheStore, cacheDir: string, projectRoot: string): Promise<ReadonlyMap<string, string>> {
+  const files = new Map<string, string>();
+  for (const attempt of result.attempts) {
+    for (const step of attempt.steps) {
+      const key = step.cache?.entry;
+      if (key === undefined || files.has(key)) continue;
+      files.set(key, displayPath(projectRoot, path.join(cacheDir, await store.recordingFile(key, result.testId))));
+    }
+  }
+  return files;
 }

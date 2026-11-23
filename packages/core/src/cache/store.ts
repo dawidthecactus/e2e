@@ -213,6 +213,25 @@ export class FileCacheStore implements CacheStore {
   }
 
   /**
+   * The reviewed file that holds a step's recording, by its key, under
+   * whichever spelling of the test's id it was filed (`holders`); for a key
+   * it holds nowhere, the file the test's recordings are in, or would be
+   * written to. The test id is cut as a recording keeps it, which is what
+   * the store names files from. Not part of `CacheStore`: trace pages name
+   * the file beside a step's key.
+   */
+  async recordingFile(keyHash: string | undefined, testId: string): Promise<string> {
+    const recorded = bound(testId, MAX_TRACE_TEST_ID_CHARS);
+    const [holder] = keyHash === undefined || !KEY_HASH.test(keyHash) ? [] : await this.holders(keyHash, recorded);
+    if (holder !== undefined) return `${holder.name}${RECORDING_EXTENSION}`;
+    const base = recordingName(recorded);
+    const own = await this.locate(base, recorded);
+    if (own !== undefined) return `${own.name}${RECORDING_EXTENSION}`;
+    const collided = collisionName(base, recorded);
+    return `${(await this.exists(collided)) || (await this.exists(base)) ? collided : base}${RECORDING_EXTENSION}`;
+  }
+
+  /**
    * Deletes the files of one pair the store wrote, under its test's lock and
    * as they are then: a write that landed since the pair was listed goes
    * whole, never half, so no lone YAML is left behind. Returns how many
@@ -503,19 +522,6 @@ export class FileCacheStore implements CacheStore {
   }
 }
 
-/**
- * The reviewed file that holds, or would hold, a test's recordings in the
- * file store at `directory`: the one named for the test, or its colliding
- * name when that file exists, since only a write that met another test's
- * file takes it. The test id is cut as a recording keeps it, which is what
- * the store names the file from.
- */
-export async function recordingFileName(directory: string, testId: string): Promise<string> {
-  const recorded = bound(testId, MAX_TRACE_TEST_ID_CHARS);
-  const base = recordingName(recorded);
-  const collided = `${collisionName(base, recorded)}${RECORDING_EXTENSION}`;
-  return (await stat(join(directory, collided)).then(() => true, () => false)) ? collided : `${base}${RECORDING_EXTENSION}`;
-}
 
 /** The name a store file carries before its extension, or undefined for any other file. */
 function recordingStem(fileName: string): string | undefined {
