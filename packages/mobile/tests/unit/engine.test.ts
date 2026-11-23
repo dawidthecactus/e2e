@@ -656,12 +656,12 @@ describe('lifecycle', () => {
       );
     // One scripted client per session, as agent-device gives each its own, so `finish` is read by the sessions it closed.
     const { app } = harness();
-    const pool = (script: (fake: FakeClient) => void) => {
+    const pool = (script: (fake: FakeClient, session: string) => void) => {
       const clients: [string, FakeClient][] = [];
       const engine = buildEngine(
         new AgentDeviceSurface({ platform: 'ios' }, (session) => {
           const fake = createFakeClient({ 'apps.open': () => ({ session, appName: 'Settings', appBundleId: 'com.apple.Preferences', identifiers: {} }) });
-          script(fake);
+          script(fake, session);
           clients.push([session, fake]);
           return fake.client;
         }),
@@ -790,7 +790,8 @@ describe('lifecycle', () => {
     expect(await bound(smokeAlone.prepare(info))).toMatch(/^rejected: open Settings failed: Device is already in use by session "transient:smoke-0"; no other booted ios device is free for worker slot 0: boot another one$/);
 
     // Two slots on the only two devices, a live session takes the first one's at the open: the other slot's device is
-    // not free for it, so the slot is dropped and the run goes on with one worker, which boots B as slot 0.
+    // not free for it, so the slot is dropped and the run goes on with one worker, which boots B as slot 0 under the
+    // session B warmed with.
     const pair = harness({ device: undefined });
     pair.fake.respond('devices.list', () => [device('A'), device('B')]);
     pair.fake.respond('apps.open', refuse(inSession, ['A']));
@@ -798,16 +799,17 @@ describe('lifecycle', () => {
     const paired = await pair.prepare({ ...info, slots: 2, log: (line) => pairLines.push(line) });
     expect(paired?.workers).toBe(1);
     const pairEnv = paired?.env ?? {};
-    expect(pairEnv[poolVariableIn(pairEnv, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B' }]));
+    expect(pairEnv[poolVariableIn(pairEnv, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B', session: 'e2e-ios-1' }]));
     expect(pairLines).toContain('no other booted device is free for slot 0; the run goes on with 1 worker(s)');
     await expect(boot(pair, 'ios', 0, pairEnv)).resolves.toBeUndefined();
     expect(pair.fake.lastArgs('devices.boot')).toMatchObject({ udid: 'B' });
+    expect(pair.sessions.at(-1)).toBe('e2e-ios-1');
 
-    // The renumbered slot warms under the dropped slot's session, so its worker resumes the session it warmed with,
-    // and each session name is closed once. A later slot that loses its device is dropped without renumbering.
+    // The slots after a dropped one take the numbers below and keep the sessions they were bound under, so each worker
+    // resumes the session its device warmed with, and every session the warm-up opened is closed once.
     for (const [lost, kept, warmedAs] of [
-      [['A'], [{ deviceId: 'B' }, { deviceId: 'C' }], [['e2e-ios-0', 'A'], ['e2e-ios-0', 'B'], ['e2e-ios-1', 'C']]],
-      [['B'], [{ deviceId: 'A' }, { deviceId: 'C' }], [['e2e-ios-0', 'A'], ['e2e-ios-1', 'B'], ['e2e-ios-1', 'C']]],
+      [['A'], [{ deviceId: 'B', session: 'e2e-ios-1' }, { deviceId: 'C', session: 'e2e-ios-2' }], [['e2e-ios-0', 'A'], ['e2e-ios-1', 'B'], ['e2e-ios-2', 'C']]],
+      [['B'], [{ deviceId: 'A' }, { deviceId: 'C', session: 'e2e-ios-2' }], [['e2e-ios-0', 'A'], ['e2e-ios-1', 'B'], ['e2e-ios-2', 'C']]],
       [['C'], [{ deviceId: 'A' }, { deviceId: 'B' }], [['e2e-ios-0', 'A'], ['e2e-ios-1', 'B'], ['e2e-ios-2', 'C']]],
     ] as const) {
       const h = pool((fake) => {
@@ -817,8 +819,41 @@ describe('lifecycle', () => {
       expect(await h.prepare(3), `lost ${lost.join()}`).toBe(JSON.stringify(kept));
       const opened = h.clients.flatMap(([session, fake]) => fake.calls.filter((call) => call.method === 'apps.open').map((call) => [session, (call.args as { udid?: string }).udid]));
       expect(opened, `lost ${lost.join()}`).toEqual(warmedAs);
-      expect(await h.closed(), `lost ${lost.join()}`).toEqual(kept.map((_, slot) => `e2e-ios-${slot}`).concat(lost[0] === 'C' ? ['e2e-ios-2'] : []).toSorted());
+      expect(await h.closed(), `lost ${lost.join()}`).toEqual(['e2e-ios-0', 'e2e-ios-1', 'e2e-ios-2']);
     }
+
+    // B still holds this target's own `e2e-ios-1` from an earlier run, which the inventory reads as the run's own and
+    // agent-device lets only that session use. When A is taken and slot 0 dropped, B keeps warming under `e2e-ios-1`.
+    const resumed = pool((fake, session) => {
+      fake.respond('devices.list', () => [device('A'), { ...device('B'), claimedBy: { session: 'e2e-ios-1' } }]);
+      fake.respond('apps.open', (args) => {
+        const id = (args as { udid?: string }).udid;
+        if (id === 'A') throw inSession('A');
+        if (id === 'B' && session !== 'e2e-ios-1') throw claimed('B', 'e2e-ios-1');
+        return { session, appName: 'Settings', appBundleId: 'com.apple.Preferences', identifiers: {} };
+      });
+    });
+    expect(await resumed.prepare(2)).toBe(JSON.stringify([{ deviceId: 'B', session: 'e2e-ios-1' }]));
+
+    // A renumbered slot that then moves keeps its session: A is taken with nothing free, so slot 0 is dropped; B, now
+    // slot 0 under `e2e-ios-1`, is taken too, and C, free by the next inventory, takes over under `e2e-ios-1`.
+    let listed = 0;
+    const shifted = pool((fake) => {
+      fake.respond('devices.list', () => (++listed <= 2 ? [device('A'), device('B')] : [device('A'), device('B'), device('C')]));
+      fake.respond('apps.open', refuse(inSession, ['A', 'B']));
+    });
+    expect(await shifted.prepare(2)).toBe(JSON.stringify([{ deviceId: 'C', session: 'e2e-ios-1' }]));
+
+    // An inventory that fails after a refusal is the error: it never reads as "nothing free", which would drop a slot.
+    let inventories2 = 0;
+    const blind = pool((fake) => {
+      fake.respond('devices.list', () => {
+        if (++inventories2 > 1) throw new AppError('COMMAND_FAILED', 'simctl list failed');
+        return [device('A'), device('B')];
+      });
+      fake.respond('apps.open', refuse(inSession, ['A']));
+    });
+    expect(await blind.prepare(2)).toMatch(/^rejected: .*simctl list failed/);
 
     // With no slot left, the run fails with the holder rather than starting a worker on a device another session holds.
     const none = harness({ device: undefined });

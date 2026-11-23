@@ -244,8 +244,8 @@ export class DevicePool {
   /**
    * The clients `warm` opened sessions with, per target and session name, held
    * for `finish` to close whatever `warm` got to. A slot moved to another device
-   * keeps its session name, and a later slot that takes a dropped slot's
-   * number warms under that name, so the last client of a name is the one closed.
+   * keeps its session name, and so does a later slot that takes a dropped
+   * slot's number, so the last client of a name is the one closed.
    */
   private readonly warmed = new Map<string, Map<string, AgentDeviceClient>>();
 
@@ -291,6 +291,11 @@ export class DevicePool {
   session(owner: SessionOwner, slot: number): string {
     const host = owner.hostId === undefined ? '' : `-${owner.hostId}`;
     return `${this.options.session ?? `e2e-${owner.targetName}${host}`}-${slot}`;
+  }
+
+  /** The session a worker slot warms and resumes under: the one its binding kept after a dropped slot, else the slot's own. */
+  slotSession(owner: SessionOwner, slot: number, binding: SlotBinding | undefined): string {
+    return binding?.session ?? this.session(owner, slot);
   }
 
   /**
@@ -342,12 +347,15 @@ export class DevicePool {
         info.log(`${cause.deviceId} is held by agent-device session "${cause.holder}"; trying the next free device`);
         const next = await found.replace(info, slot, taken, bindings.filter((_, other) => other !== slot));
         if (next !== undefined) {
-          bindings[slot] = next;
+          const kept = bindings[slot]!.session;
+          bindings[slot] = kept === undefined ? next : { ...next, session: kept };
         } else if (cause.passing) {
           info.log(`slot ${slot} keeps ${cause.deviceId}: no other booted device is free, and the worker's start finds it once the command ends`);
           slot++;
         } else if (bindings.length > 1) {
-          // The slots after this one have not warmed yet, so each takes the number below and warms under that session.
+          // The slots after this one have not warmed yet: each takes the number below and keeps its own session, which
+          // a device may already hold for this target from an earlier run.
+          for (let later = slot + 1; later < bindings.length; later++) bindings[later] = { ...bindings[later]!, session: this.slotSession(info, later, bindings[later]) };
           bindings.splice(slot, 1);
           info.log(`no other booted device is free for slot ${slot}; the run goes on with ${bindings.length} worker(s)`);
         } else {
@@ -428,7 +436,7 @@ export class DevicePool {
     const movable = discovered && binding.deviceId !== undefined;
     const label = deviceLabel(binding) ?? `a booted ${this.options.platform} device`;
     const where = deviceSelection(this.options.platform, binding);
-    const session = this.session(info, slot);
+    const session = this.slotSession(info, slot, binding);
     const at = `session ${session} on ${label}`;
     const client = this.createClient(session, binding);
     this.retain(info.targetName, session, client);
