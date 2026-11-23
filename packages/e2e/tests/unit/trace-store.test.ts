@@ -86,7 +86,8 @@ describe('FileCacheStore', () => {
       [
         '# Replay recording of one e2e test. Review it like code: each step lists what',
         '# a replay does (do) and what it checks before the step passes (expect).',
-        `# Generated, not reviewed: ${NAME}.lock.json holds the cache keys.`,
+        `# Don't edit it: ${NAME}.lock.json holds each recording's key and digest,`,
+        '# so an edited recording no longer replays. Record it again instead.',
         '',
         'test: settings › upgrades the plan',
         'file: tests/settings.e2e.ts',
@@ -128,7 +129,7 @@ describe('FileCacheStore', () => {
     // A read without the step finds the entry by listing the directory.
     expect((await store.read(KEY)).status).toBe('hit');
     const lock = JSON.parse(await readFile(lockPath(directory), 'utf8'));
-    expect(lock).toMatchObject({ format: 'e2e-replay-lock-1', testId: TEST_ID, entries: [{ key: KEY, step: 0, target: 'web' }] });
+    expect(lock).toMatchObject({ format: 'e2e-replay-lock-1', testId: TEST_ID, entries: [{ key: KEY, target: 'web', digest: expect.stringMatching(/^[a-f0-9]{64}$/u) }] });
   });
 
   it('lists one step recorded on two targets under one act, and drops each on its own', async () => {
@@ -277,13 +278,33 @@ describe('FileCacheStore', () => {
     expect(codes).toEqual([0, 0, 0, 0]);
   });
 
-  it('says in the lock when the act it shows cannot be held to the key', async () => {
+  it('replays a step whose act the YAML shows redacted', async () => {
     const { directory, store } = await makeStore();
     // The instruction as the entry keeps it differs from the one the key digested (a redacted secret, say).
     await store.write(KEY, payload('web', { recordedFor: step('web', { instruction: 'upgrade the plan to <secret:tier>' }) }));
-    const lock = JSON.parse(await readFile(lockPath(directory), 'utf8'));
-    expect(lock.entries[0].verbatim).toBe(false);
+    expect(await readFile(yamlPath(directory), 'utf8')).toContain('- act: upgrade the plan to <secret:tier>\n');
     expect((await store.read(KEY, step())).status).toBe('hit');
+  });
+
+  it('finds each recording wherever its step moves, and reads one deleted from the YAML as absent', async () => {
+    const { directory, store } = await makeStore();
+    const named = (instruction: string) => step('web', { instruction, instructionDigest: instructionDigest(instruction) });
+    const [first, second] = [named('open the cart'), named('check out')];
+    await store.write(KEY, payload('web', { recordedFor: first }));
+    await store.write(OTHER_KEY, payload('web', { recordedFor: second, startPath: '/checkout', endPath: '/checkout' }));
+    const yaml = await readFile(yamlPath(directory), 'utf8');
+    const at = yaml.indexOf('\n\n  - act: check out');
+    const [head, firstStep, secondStep] = [yaml.slice(0, yaml.indexOf('  - act: open the cart')), yaml.slice(yaml.indexOf('  - act: open the cart'), at), yaml.slice(at + 2)];
+    // Swapped, as a merge or a reviewer could leave them: each key keeps its own recording.
+    await writeFile(yamlPath(directory), `${head}${secondStep}\n${firstStep}\n`, 'utf8');
+    const swapped = [await store.read(KEY, first), await store.read(OTHER_KEY, second)];
+    expect(swapped.map((read) => read.status === 'hit' && read.entry.payload.startPath)).toEqual(['/settings', '/checkout']);
+    // Deleted from the YAML: that step is no longer recorded, and the other still replays.
+    await writeFile(yamlPath(directory), `${head}${firstStep}\n`, 'utf8');
+    expect((await store.read(OTHER_KEY, second)).status).toBe('miss');
+    expect((await store.read(KEY, first)).status).toBe('hit');
+    expect(await store.write('c'.repeat(64), payload('ios', { recordedFor: { ...first, targetId: 'ios' } }))).toBeDefined();
+    expect(JSON.parse(await readFile(lockPath(directory), 'utf8')).entries).toHaveLength(2);
   });
 
   it('misses on an absent entry and rejects a malformed key hash', async () => {
@@ -373,9 +394,9 @@ describe('FileCacheStore', () => {
     const { directory, store } = await makeStore();
     const second = step('web', { callIndex: 1 });
     await store.write(KEY, payload());
-    await store.write(OTHER_KEY, payload('web', { recordedFor: second }));
+    await store.write(OTHER_KEY, payload('web', { recordedFor: second, startPath: '/billing', endPath: '/billing' }));
     const yaml = await readFile(yamlPath(directory), 'utf8');
-    // The second step's act no longer digests to its key: that recording reads as invalid, the first still replays.
+    // The second step's act no longer matches its lock entry: that recording reads as invalid, the first still replays.
     const edited = `${yaml.slice(0, yaml.lastIndexOf('- act:'))}- act: downgrade the plan to {tier}\n${yaml.slice(yaml.indexOf('\n', yaml.lastIndexOf('- act:')) + 1)}`;
     await writeFile(yamlPath(directory), edited, 'utf8');
     expect((await store.read(OTHER_KEY, second)).status).toBe('invalid');

@@ -205,6 +205,7 @@ async function readContents(directory: string): Promise<CacheContents> {
       unreadable.push({ file, reason: parsed.reason });
       continue;
     }
+    for (const where of parsed.unclaimed) unreadable.push({ file, reason: `${file}: ${where} has no entry in the lock file, so it never replays` });
     for (const recording of parsed.recordings) {
       if (recording.status === 'invalid') {
         unreadable.push({ file, reason: recording.reason });

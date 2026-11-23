@@ -1,6 +1,7 @@
 # Replay recording of one e2e test. Review it like code: each step lists what
 # a replay does (do) and what it checks before the step passes (expect).
-# Generated, not reviewed: unique-cache-act-adds-an-address-with-a-run-unique-label.lock.json holds the cache keys.
+# Don't edit it: unique-cache-act-adds-an-address-with-a-run-unique-label.lock.json holds each recording's key and digest,
+# so an edited recording no longer replays. Record it again instead.
 
 test: act adds an address with a run-unique label
 file: tests-agent/unique-cache.e2e.ts

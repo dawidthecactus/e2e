@@ -5,7 +5,9 @@
  * one test, each under the instruction it was recorded for, then under each
  * target it was recorded on: what a replay does (`do`) and what it checks
  * before the step passes (`expect`). It is the replay input itself, not a
- * rendering of it: what reads back from it is what replays.
+ * rendering of it: what reads back from it is what replays. It is reviewed,
+ * not edited: each lock entry holds its recording to a digest of what the
+ * YAML showed when it was written.
  *
  * `<name>.lock.json` is generated and is never reviewed: the cache key of
  * each recording, the digests that key holds, the key's context, and the
@@ -17,16 +19,16 @@
  * joined back into `trace-1` documents and validated by `readTraceEntry`,
  * the one owner of replayability. On top of that, the YAML is read with the
  * core schema only, refusing tags, anchors, aliases, merge keys, duplicate
- * keys, and any key the format does not name; the instruction and params
- * it shows must digest to the ones the lock recorded, so a step cannot be
- * edited under another step's key; and the lock and the YAML must name
- * exactly the same recordings. Nothing in either file is evaluated.
+ * keys, and any key the format does not name; and a lock entry replays
+ * only the recording its digest names (`recordingDigest`), so neither an
+ * edit nor a recording moved under another step's key replays. Nothing in
+ * either file is evaluated.
  */
 
 import type { Document, Node as YamlNode } from 'yaml';
 import { summarizeRecordedAction } from '../agent/actions.ts';
 import type { JsonValue } from '../types.ts';
-import { instructionDigest, paramsDigest } from './identity.ts';
+import { canonicalJson, sha256Hex } from '../internal/ids.ts';
 import {
   DESCRIPTOR_FIELDS,
   isNodeAction,
@@ -103,7 +105,14 @@ export type ReadRecording =
 
 /** A pair of files read back, or why the pair as a whole cannot be trusted. */
 export type ParsedRecordingFile =
-  | { readonly status: 'ok'; readonly testId: string; readonly recordings: readonly ReadRecording[] }
+  | {
+      readonly status: 'ok';
+      readonly testId: string;
+      /** Its recordings in the order the YAML lists them, then the ones that are not in it as written. */
+      readonly recordings: readonly ReadRecording[];
+      /** The YAML's recordings no lock entry claims (`steps[2] on web`): none of them replays. */
+      readonly unclaimed: readonly string[];
+    }
   | { readonly status: 'invalid'; readonly testId?: string; readonly keyHashes: readonly string[]; readonly reason: string };
 
 /**
@@ -165,7 +174,7 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
   const flow = (value: object): YamlNode => doc.createNode(value, { flow: true }) as YamlNode;
   const header = describeTestId(file.testId);
   const groups = groupSteps(file.recordings);
-  const lockEntries: Record<string, unknown>[] = [];
+  const placed: { readonly recording: StoredRecording; readonly step: number }[] = [];
 
   const steps = groups.map((group, stepIndex) => {
     const step = group.recordings[0]!.trace.recordedFor!;
@@ -174,7 +183,7 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
     for (const recording of group.recordings) {
       const { trace } = recording;
       targets.set(trace.recordedFor!.targetId, renderVariant(trace, flow));
-      lockEntries.push(lockEntry(recording, stepIndex, step.instruction, step.params));
+      placed.push({ recording, step: stepIndex });
     }
     return {
       ...(step.instruction === undefined ? {} : { act: step.instruction }),
@@ -192,12 +201,17 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
   doc.commentBefore = [
     `${RECORDING_HEADER.slice(1)} Review it like code: each step lists what`,
     ' a replay does (do) and what it checks before the step passes (expect).',
-    ` Generated, not reviewed: ${lockName} holds the cache keys.`,
+    ` Don't edit it: ${lockName} holds each recording's key and digest,`,
+    ' so an edited recording no longer replays. Record it again instead.',
   ].join('\n');
   spaceSteps(yaml, doc);
+  const text = doc.toString({ lineWidth: 0, indentSeq: true });
 
-  const lock = { format: RECORDING_LOCK_FORMAT, testId: file.testId, entries: lockEntries };
-  return { yaml: doc.toString({ lineWidth: 0, indentSeq: true }), lock: `${JSON.stringify(lock, null, 2)}\n` };
+  // Each lock entry is held to its recording as the YAML reads back, so the digest is taken from the text itself.
+  const written = (yaml.parse(text) as { steps: Record<string, unknown>[] }).steps;
+  const entries = placed.map(({ recording, step }) => lockEntry(recording, recordingDigest(written[step]!, recording.trace.recordedFor!.targetId)));
+  const lock = { format: RECORDING_LOCK_FORMAT, testId: file.testId, entries };
+  return { yaml: text, lock: `${JSON.stringify(lock, null, 2)}\n` };
 }
 
 /** A blank line before `steps` and between steps, so each reads as its own block and a diff stays inside it. */
@@ -215,33 +229,38 @@ function spaceSteps(yaml: Yaml, doc: Document): void {
   });
 }
 
+/**
+ * What a lock entry holds its recording to: the step as the YAML shows it
+ * (act, params, agent), the target, and that target's recording, as the
+ * YAML parses. An edit to any of them, a recording moved under another
+ * step, or a YAML written without its lock no longer matches, wherever in
+ * the file the step sits.
+ */
+function recordingDigest(step: Record<string, unknown>, targetId: string): string {
+  const targets = step['targets'] as Record<string, unknown>;
+  return sha256Hex(canonicalJson({
+    act: step['act'] ?? null,
+    params: step['params'] ?? null,
+    agent: step['agent'] ?? null,
+    target: targetId,
+    recording: Object.hasOwn(targets, targetId) ? targets[targetId] : null,
+  }));
+}
+
 /** The lock's line for one recording: everything a replay keys or never reads, nothing a reviewer needs. */
-function lockEntry(
-  recording: StoredRecording,
-  step: number,
-  instruction: string | undefined,
-  params: Readonly<Record<string, JsonValue>> | undefined,
-): Record<string, unknown> {
+function lockEntry(recording: StoredRecording, digest: string): Record<string, unknown> {
   const { trace } = recording;
   const recordedFor = trace.recordedFor!;
-  // The YAML shows the step's instruction and params; when they do not digest
-  // to this recording's key (redacted, cut, or never recorded), a reader
-  // cannot hold the YAML to the key, and says so rather than failing it.
-  const verbatim =
-    instruction !== undefined &&
-    instructionDigest(instruction) === recordedFor.instructionDigest &&
-    paramsDigest(params) === recordedFor.paramsDigest;
   return {
     key: recording.keyHash,
-    step,
     target: recordedFor.targetId,
+    digest,
     createdAt: recording.createdAt,
     instructionDigest: recordedFor.instructionDigest,
     paramsDigest: recordedFor.paramsDigest,
     callIndex: recordedFor.callIndex,
     agent: recordedFor.agent,
     ...(recordedFor.identityDigest === undefined ? {} : { identityDigest: recordedFor.identityDigest }),
-    ...(verbatim ? {} : { verbatim: false }),
     executor: trace.executor,
     ...(trace.recordedBy === undefined ? {} : { recordedBy: trace.recordedBy }),
     summary: trace.summary,
@@ -593,7 +612,8 @@ interface ReadStep {
   readonly act?: string;
   readonly params?: Readonly<Record<string, JsonValue>>;
   readonly agent?: string;
-  readonly targets: ReadonlyMap<string, Record<string, unknown>>;
+  /** Each target's recording, as `trace-1` payload fields, and its `recordingDigest`. */
+  readonly targets: ReadonlyMap<string, { readonly variant: Record<string, unknown>; readonly digest: string }>;
 }
 
 function readSteps(document: unknown): { readonly test: string; readonly file?: string; readonly steps: readonly ReadStep[] } {
@@ -609,7 +629,12 @@ function readSteps(document: unknown): { readonly test: string; readonly file?: 
     const params = step['params'] === undefined ? undefined : (object(step['params'], `${where}.params`) as Readonly<Record<string, JsonValue>>);
     const agent = step['agent'] === undefined ? undefined : readString(step['agent'], `${where}.agent`);
     const targetsRaw = object(step['targets'], `${where}.targets`);
-    const targets = new Map(Object.entries(targetsRaw).map(([targetId, variant]) => [targetId, readVariant(variant, `${where}.targets.${targetId}`)]));
+    const targets = new Map(
+      Object.entries(targetsRaw).map(([targetId, variant]) => [
+        targetId,
+        { variant: readVariant(variant, `${where}.targets.${targetId}`), digest: recordingDigest(step, targetId) },
+      ]),
+    );
     if (targets.size === 0) fail(`${where}.targets names no target`);
     return { ...(act === undefined ? {} : { act }), ...(params === undefined ? {} : { params }), ...(agent === undefined ? {} : { agent }), targets };
   });
@@ -620,8 +645,8 @@ const SHA256_HEX = /^[a-f0-9]{64}$/u;
 
 interface LockEntry {
   readonly key: string;
-  readonly step: number;
   readonly target: string;
+  readonly digest: string;
   readonly raw: Record<string, unknown>;
 }
 
@@ -639,24 +664,29 @@ function readLock(text: string): { readonly testId: string; readonly entries: re
   const seen = new Set<string>();
   const entries = list(raw['entries'], "the lock file's entries").map((value, index): LockEntry => {
     const entry = object(value, `lock entry ${String(index)}`);
-    const { key, step, target } = entry;
+    const { key, target, digest } = entry;
     if (typeof key !== 'string' || !SHA256_HEX.test(key)) fail(`lock entry ${String(index)} has no key`);
-    if (typeof step !== 'number' || !Number.isSafeInteger(step) || step < 0) fail(`lock entry ${String(index)} has no step`);
     if (typeof target !== 'string' || target === '') fail(`lock entry ${String(index)} has no target`);
-    const slot = JSON.stringify([step, target]);
-    if (seen.has(key) || seen.has(slot)) fail(`lock entry ${String(index)} repeats a key or a step's target`);
+    if (typeof digest !== 'string' || !SHA256_HEX.test(digest)) fail(`lock entry ${String(index)} has no digest`);
+    if (seen.has(key)) fail(`lock entry ${String(index)} repeats a key`);
     seen.add(key);
-    seen.add(slot);
-    return { key, step, target, raw: entry };
+    return { key, target, digest, raw: entry };
   });
   return { testId, entries };
 }
 
 /**
- * Reads a YAML and lock pair back into validated entries. A pair whose files
- * disagree about which recordings exist, or whose YAML is not in the format,
- * is invalid as a whole; a recording whose own fields do not validate is
- * invalid alone, and the others still read.
+ * Reads a YAML and lock pair back into validated entries. Each lock entry
+ * finds its recording in the YAML by its digest, wherever the step sits, so
+ * steps reordered, merged in, or deleted leave the others readable. A pair
+ * whose YAML is not in the format is invalid as a whole; a recording whose
+ * fields do not validate is invalid alone.
+ *
+ * A lock entry whose recording is not in the YAML was deleted from it, and
+ * reads as absent, unless the YAML also holds a recording no entry claims:
+ * then a recording was edited (or the YAML written without its lock), and
+ * every entry left without one is invalid. A claimed recording never
+ * replays under a key it was not written for.
  */
 export async function parseRecordingFile(yamlText: string, lockText: string): Promise<ParsedRecordingFile> {
   let lock: ReturnType<typeof readLock>;
@@ -666,27 +696,48 @@ export async function parseRecordingFile(yamlText: string, lockText: string): Pr
     return { status: 'invalid', keyHashes: [], reason: errorText(cause) };
   }
   const keyHashes = lock.entries.map((entry) => entry.key);
+  let read: ReturnType<typeof readSteps>;
   try {
-    const read = readSteps(parseYaml(await loadYaml(), yamlText));
+    read = readSteps(parseYaml(await loadYaml(), yamlText));
     const header = describeTestId(lock.testId);
     if (read.test !== header.test || read.file !== header.file) fail(`the test it names is not the lock file's ${lock.testId}`);
-    const claimed = new Set<string>();
-    const recordings = lock.entries.map((entry): ReadRecording => {
-      const step = read.steps[entry.step];
-      const variant = step?.targets.get(entry.target);
-      if (step === undefined || variant === undefined) fail(`the lock file names steps[${String(entry.step)}] on ${entry.target}, which the recording does not list`);
-      claimed.add(JSON.stringify([entry.step, entry.target]));
-      return readRecording(lock.testId, entry, step, variant);
-    });
-    read.steps.forEach((step, index) => {
-      for (const targetId of step.targets.keys()) {
-        if (!claimed.has(JSON.stringify([index, targetId]))) fail(`steps[${String(index)}] on ${targetId} has no entry in the lock file`);
-      }
-    });
-    return { status: 'ok', testId: lock.testId, recordings };
   } catch (cause) {
     return { status: 'invalid', testId: lock.testId, keyHashes, reason: errorText(cause) };
   }
+  const shown = new Map<string, { readonly index: number; readonly targetId: string; readonly step: ReadStep; readonly variant: Record<string, unknown> }>();
+  read.steps.forEach((step, index) => {
+    for (const [targetId, { variant, digest }] of step.targets) {
+      if (!shown.has(digest)) shown.set(digest, { index, targetId, step, variant });
+    }
+  });
+  const claimed = new Set<string>();
+  const found: { readonly order: number; readonly recording: ReadRecording }[] = [];
+  const unmatched: LockEntry[] = [];
+  for (const entry of lock.entries) {
+    const match = shown.get(entry.digest);
+    if (match === undefined || match.targetId !== entry.target) {
+      unmatched.push(entry);
+      continue;
+    }
+    claimed.add(entry.digest);
+    found.push({ order: match.index, recording: readRecording(lock.testId, entry, match.index, match.step, match.variant) });
+  }
+  const unclaimed = read.steps.flatMap((step, index) =>
+    [...step.targets].flatMap(([targetId, { digest }]) => (claimed.has(digest) ? [] : [`steps[${String(index)}] on ${targetId}`])),
+  );
+  const edited = unclaimed.length === 0
+    ? []
+    : unmatched.map((entry): ReadRecording => ({
+        keyHash: entry.key,
+        status: 'invalid',
+        reason: `the recording of key ${entry.key.slice(0, 12)} on ${entry.target} is not in the YAML as it was written: edited, or written without its lock`,
+      }));
+  return {
+    status: 'ok',
+    testId: lock.testId,
+    recordings: [...found.toSorted((a, b) => a.order - b.order).map((item) => item.recording), ...edited],
+    unclaimed,
+  };
 }
 
 /**
@@ -717,19 +768,11 @@ function errorText(cause: unknown): string {
 }
 
 /** One recording joined from its lock entry and its YAML, validated as a `trace-1` entry. */
-function readRecording(testId: string, entry: LockEntry, step: ReadStep, variant: Record<string, unknown>): ReadRecording {
+function readRecording(testId: string, entry: LockEntry, index: number, step: ReadStep, variant: Record<string, unknown>): ReadRecording {
   const invalid = (reason: string): ReadRecording => ({ keyHash: entry.key, status: 'invalid', reason });
   const lock = entry.raw;
-  const where = `steps[${String(entry.step)}] on ${entry.target}`;
+  const where = `steps[${String(index)}] on ${entry.target}`;
   if ((step.agent ?? DEFAULT_AGENT) !== lock['agent']) return invalid(`${where} names another agent than its lock entry`);
-  if (lock['verbatim'] !== false) {
-    if (step.act === undefined || typeof lock['instructionDigest'] !== 'string' || instructionDigest(step.act) !== lock['instructionDigest']) {
-      return invalid(`${where}: its act is not the instruction its key was recorded for`);
-    }
-    if (typeof lock['paramsDigest'] !== 'string' || paramsDigest(step.params) !== lock['paramsDigest']) {
-      return invalid(`${where}: its params are not the ones its key was recorded for`);
-    }
-  }
   const recordedFor = {
     testId,
     targetId: entry.target,

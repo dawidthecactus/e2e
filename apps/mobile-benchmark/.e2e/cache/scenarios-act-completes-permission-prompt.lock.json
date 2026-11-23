@@ -4,8 +4,8 @@
   "entries": [
     {
       "key": "f50a29e19e742730567db09904ee11673498a119cb2ef0da68c08ab6834873ec",
-      "step": 0,
       "target": "android-emulator",
+      "digest": "b1dbd10d4411be79ec07c4be328e7a2bea1e7c5b137f276b8dd3cd2545cefbc0",
       "createdAt": "2026-10-09T07:00:28.966Z",
       "instructionDigest": "b0942b32f51f5f05d38db2a1978624dad1187acfb8aca674dbbb09cc9c29ac87",
       "paramsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
@@ -30,8 +30,8 @@
     },
     {
       "key": "c88b3e2074686fa95172580baee395a9efd45c3ce815d8fdfc695293c1f94228",
-      "step": 0,
       "target": "ios-simulator",
+      "digest": "b3fa0180876a4890f7d36e38f879b77833aeba17278a0221b8f5b41ae79132d4",
       "createdAt": "2026-10-15T16:28:56.782Z",
       "instructionDigest": "b0942b32f51f5f05d38db2a1978624dad1187acfb8aca674dbbb09cc9c29ac87",
       "paramsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",

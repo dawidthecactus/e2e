@@ -4,8 +4,8 @@
   "entries": [
     {
       "key": "d9508413b3c3bd9567d0277a312312d32c4a1770d65e8e789d3ba0298717e662",
-      "step": 0,
       "target": "web",
+      "digest": "57359e57ce799fd6391884506ac91d044ec42bf70158ae8ed1d8218776568166",
       "createdAt": "2026-10-04T08:28:57.613Z",
       "instructionDigest": "c26456300e1d572e5598b0d8d2584171681d80d8a20bef86bdda6e9d2c7f976e",
       "paramsDigest": "10cf8df51d5b30096b97501956aa95d056885035f7bc67d093d076b7c4caecf0",

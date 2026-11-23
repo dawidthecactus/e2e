@@ -1,6 +1,7 @@
 # Replay recording of one e2e test. Review it like code: each step lists what
 # a replay does (do) and what it checks before the step passes (expect).
-# Generated, not reviewed: scenarios-act-completes-broken-accessibility.lock.json holds the cache keys.
+# Don't edit it: scenarios-act-completes-broken-accessibility.lock.json holds each recording's key and digest,
+# so an edited recording no longer replays. Record it again instead.
 
 test: act completes Broken Accessibility
 file: tests-agent/scenarios.e2e.ts

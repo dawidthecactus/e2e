@@ -338,8 +338,13 @@ steps:
 - Steps are listed in the order the test runs them. A step recorded for
   the first time goes where it runs, between the steps before and after it.
 - A step whose instruction or params change is a new step. The old step's
-  recording stays in the file until you delete it from both files, or run
-  `npx e2e cache clear`.
+  recording stays in the file until you delete that step from the YAML. A
+  step deleted from the YAML isn't replayed, and the next run that records
+  drops its lock entry.
+- Review the YAML, but don't edit it. Each lock entry holds a digest of its
+  recording as written, so an edited recording reads as `invalid-entry`;
+  record the step again instead. Moving steps around, or merging two
+  branches that each recorded a step, is fine.
 - A run rewrites the whole file when it records, so comments you add to it
   are lost.
 - Recordings hold no prompts, conversations, screenshots, observed trees,
@@ -413,9 +418,9 @@ GitHub diffs, add this line to `.gitattributes`:
 **/.e2e/cache/*.lock.json linguist-generated=true
 ```
 
-The reader checks each step's `act` and `params` against its key, and
-refuses tags, anchors, and unknown keys. A recording edited under another
-step's key reads as `invalid-entry`.
+The reader checks each recording against its lock entry's digest, and
+refuses tags, anchors, and unknown keys. An edited recording, or one moved
+under another step, reads as `invalid-entry`.
 
 Local runs leave a committed directory clean unless something changed. A
 replayed step never rewrites its entry, and a live recording with the same

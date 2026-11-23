@@ -1,6 +1,7 @@
 # Replay recording of one e2e test. Review it like code: each step lists what
 # a replay does (do) and what it checks before the step passes (expect).
-# Generated, not reviewed: control-inventory-a-right-click-opens-the-file-menu-and-rename-renames-the-file.lock.json holds the cache keys.
+# Don't edit it: control-inventory-a-right-click-opens-the-file-menu-and-rename-renames-the-file.lock.json holds each recording's key and digest,
+# so an edited recording no longer replays. Record it again instead.
 
 test: control inventory › a right-click opens the file menu and Rename renames the file
 file: tests-agent/control-inventory.e2e.ts

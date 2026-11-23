@@ -4,8 +4,8 @@
   "entries": [
     {
       "key": "bac4ef2c2e541ff451b7cacb5b4470aa86a01fbb224794ca75972e219b5215e8",
-      "step": 0,
       "target": "android-emulator",
+      "digest": "5b498c242b829655a2a05ccf31743a9476930462da3725813c1eea5c745621cb",
       "createdAt": "2026-10-09T06:59:56.716Z",
       "instructionDigest": "970c887978c38f936a27d9b90e47b8e93318f07069e136ba3b343e8bfa936525",
       "paramsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
