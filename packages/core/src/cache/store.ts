@@ -6,8 +6,10 @@
  * holding the keys (`recording-file.ts`, `recording-name.ts`). A read opens
  * the files of the test the step belongs to and finds the entry by its key;
  * a write rewrites the pair with the entry in its step's place, under a
- * lock, through temporary files and atomic renames. Reads fail closed: an
- * oversized or unreadable pair is a miss, never a repair.
+ * lock, through temporary files and atomic renames. Reads fail closed: a
+ * test's pair that is oversized or does not read is invalid for every step
+ * of the test, never a repair, and a write or an eviction that would drop a
+ * recording it cannot read leaves the pair alone.
  *
  * A step holds one recording per target. A write for a step and target
  * that already has one replaces it, under whatever key: a recording made
@@ -26,6 +28,7 @@ import { timestamp } from '../internal/ids.ts';
 import { withFileLock } from './file-lock.ts';
 import {
   parseRecordingFile,
+  recordingNamesTest,
   renderRecordingFile,
   stepIdentity,
   writtenByStore,
@@ -119,7 +122,10 @@ export class FileCacheStore implements CacheStore {
     const base = recordingName(step.testId);
     return this.locked(base, async () => {
       const file = await this.locate(base, step.testId);
-      return (file === undefined ? undefined : findEntry(file, keyHash)) ?? { status: 'miss' };
+      if (file === undefined) return { status: 'miss' };
+      // The test's own pair that does not read may hold any of its steps: none of them is a miss.
+      if (file.parsed.status === 'invalid') return { status: 'invalid', reason: file.parsed.reason, bytes: file.bytes };
+      return findEntry(file, keyHash) ?? { status: 'miss' };
     });
   }
 
@@ -131,6 +137,8 @@ export class FileCacheStore implements CacheStore {
     const base = recordingName(testId);
     return this.locked(base, async () => {
       const file = await this.locate(base, testId);
+      // Rewriting a pair drops what does not read; that is a person's to fix, not a write's to erase.
+      if (file !== undefined && unreadable(file, keyHash) !== undefined) return undefined;
       const name = file?.name ?? (await this.exists(base) ? collisionName(base, testId) : base);
       const recordings = file?.parsed.status === 'ok' ? hits(file.parsed) : [];
       const sameSlot = (recording: StoredRecording) =>
@@ -157,15 +165,12 @@ export class FileCacheStore implements CacheStore {
     const base = recordingName(testId);
     await this.locked(base, async () => {
       const file = await this.locate(base, testId);
-      if (file === undefined) return;
-      if (file.parsed.status === 'invalid') {
-        // A pair that does not read holds nothing replayable; evicting one of
-        // its keys evicts the pair, as deleting the entry's own file did.
-        if (file.parsed.keyHashes.includes(keyHash)) await this.remove(file.name);
-        return;
-      }
-      const recordings = hits(file.parsed);
+      // A pair that does not read replays nothing, so nothing in it needs evicting; it waits for a person.
+      if (file === undefined || file.parsed.status === 'invalid') return;
       if (!file.parsed.recordings.some((recording) => recording.keyHash === keyHash)) return;
+      const problem = unreadable(file, keyHash);
+      if (problem !== undefined) throw new Error(`cannot evict ${keyHash.slice(0, 12)} without dropping a recording that does not read: ${problem}`);
+      const recordings = hits(file.parsed);
       const next = recordings.filter((recording) => recording.keyHash !== keyHash);
       if (next.length === 0) await this.remove(file.name);
       else await this.save(file.name, testId, next);
@@ -210,13 +215,21 @@ export class FileCacheStore implements CacheStore {
     return withFileLock(join(this.directory, `.${base}.writing`), operation);
   }
 
-  /** The pair holding `testId`'s recordings: its own name, or the colliding one when another test holds that. */
+  /**
+   * The pair holding `testId`'s recordings, readable or not: its own name,
+   * or the colliding one when another test holds that. The colliding name
+   * carries the test's own digest, so a pair there is the test's. A pair
+   * under its own name whose lock cannot say whose it is (a merge conflict
+   * in it, or no lock) is the test's unless its YAML names another test.
+   */
   private async locate(base: string, testId: string): Promise<LoadedFile | undefined> {
-    for (const name of [base, collisionName(base, testId)]) {
-      const file = await this.load(name);
-      if (file?.parsed.testId === testId) return file;
-    }
-    return undefined;
+    const collided = await this.load(collisionName(base, testId));
+    if (collided !== undefined) return collided;
+    const file = await this.load(base);
+    if (file === undefined) return undefined;
+    if (file.parsed.testId !== undefined) return file.parsed.testId === testId ? file : undefined;
+    const yaml = await this.readCapped(this.path(base, RECORDING_EXTENSION));
+    return (yaml?.text === undefined ? undefined : await recordingNamesTest(yaml.text, testId)) === false ? undefined : file;
   }
 
   private async exists(name: string): Promise<boolean> {
@@ -368,6 +381,18 @@ function findEntry(file: ListedRecordingFile, keyHash: string): CacheReadResult 
   return recording.status === 'hit'
     ? { status: 'hit', entry: recording.entry, bytes: file.bytes }
     : { status: 'invalid', reason: `${file.name}${RECORDING_EXTENSION}: ${recording.reason}`, bytes: file.bytes };
+}
+
+/**
+ * Why a pair holds something a rewrite for `keyHash` would drop: the pair
+ * does not read, or one of its recordings under another key does not.
+ * Undefined when a rewrite keeps everything else in it.
+ */
+function unreadable(file: ListedRecordingFile, keyHash: string): string | undefined {
+  const { parsed } = file;
+  if (parsed.status === 'invalid') return parsed.reason;
+  const recording = parsed.recordings.find((candidate) => candidate.status === 'invalid' && candidate.keyHash !== keyHash);
+  return recording?.status === 'invalid' ? `${file.name}${RECORDING_EXTENSION}: ${recording.reason}` : undefined;
 }
 
 /** A pair's readable recordings, the ones a rewrite keeps. */

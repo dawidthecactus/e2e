@@ -688,6 +688,26 @@ export async function parseRecordingFile(yamlText: string, lockText: string): Pr
   }
 }
 
+/**
+ * Whether a YAML is the named test's, by its `test` and `file`: for a pair
+ * whose lock cannot say whose it is. Undefined when the YAML does not read
+ * far enough to tell.
+ */
+export async function recordingNamesTest(yamlText: string, testId: string): Promise<boolean | undefined> {
+  const yaml = await loadYaml();
+  let document: unknown;
+  try {
+    document = yaml.parse(yamlText);
+  } catch {
+    return undefined;
+  }
+  if (typeof document !== 'object' || document === null) return undefined;
+  const { test, file } = document as { test?: unknown; file?: unknown };
+  if (typeof test !== 'string') return undefined;
+  const header = describeTestId(testId);
+  return test === header.test && (file ?? undefined) === header.file;
+}
+
 function errorText(cause: unknown): string {
   if (cause instanceof RecordingFormatError) return cause.message;
   // A YAML too deeply nested to read overflows the parser's stack.

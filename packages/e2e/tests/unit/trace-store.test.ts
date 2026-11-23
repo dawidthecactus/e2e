@@ -270,12 +270,51 @@ describe('FileCacheStore', () => {
       expect((await store.read(KEY, step())).status).not.toBe('hit');
     });
 
-    it('and a later write replaces the file it could not read', async () => {
-      const { directory, store } = await written();
-      await writeFile(yamlPath(directory), 'steps: [ torn', 'utf8');
-      expect(await store.write(KEY, payload())).toBeDefined();
-      expect((await store.read(KEY, step())).status).toBe('hit');
+    it('and a later write or eviction leaves the file it could not read', async () => {
+      const { directory, store, yaml } = await written();
+      const torn = yaml.replace('steps:', 'steps: [ torn');
+      await writeFile(yamlPath(directory), torn, 'utf8');
+      expect(await store.write(KEY, payload())).toBeUndefined();
+      await store.delete(KEY, step());
+      expect(await readFile(yamlPath(directory), 'utf8')).toBe(torn);
     });
+
+    it('a lock in a merge conflict, for every step of the test, without a second file', async () => {
+      const { directory, store } = await written();
+      const lock = await readFile(lockPath(directory), 'utf8');
+      await writeFile(lockPath(directory), `<<<<<<< HEAD\n${lock}=======\n${lock}>>>>>>> branch\n`, 'utf8');
+      expect((await store.read(KEY, step())).status).toBe('invalid');
+      // A step the pair may or may not hold is no miss either: strict replay must not run it live.
+      expect((await store.read(OTHER_KEY, step('web', { callIndex: 1 }))).status).toBe('invalid');
+      expect(await store.write(OTHER_KEY, payload('web', { recordedFor: step('web', { callIndex: 1 }) }))).toBeUndefined();
+      expect((await readdir(directory)).toSorted()).toEqual([`${NAME}.lock.json`, `${NAME}.yml`]);
+    });
+
+    it('but not a pair whose YAML names another test', async () => {
+      const { directory, store } = await written();
+      await rm(lockPath(directory));
+      const otherTest = 'tests/settings.e2e.ts::settings::upgrades%20the%20plan!';
+      expect((await store.read(OTHER_KEY, step('web', { testId: otherTest }))).status).toBe('miss');
+    });
+  });
+
+  it('keeps a recording it cannot read when another is written or evicted beside it', async () => {
+    const { directory, store } = await makeStore();
+    const second = step('web', { callIndex: 1 });
+    await store.write(KEY, payload());
+    await store.write(OTHER_KEY, payload('web', { recordedFor: second }));
+    const yaml = await readFile(yamlPath(directory), 'utf8');
+    // The second step's act no longer digests to its key: that recording reads as invalid, the first still replays.
+    const edited = `${yaml.slice(0, yaml.lastIndexOf('- act:'))}- act: downgrade the plan to {tier}\n${yaml.slice(yaml.indexOf('\n', yaml.lastIndexOf('- act:')) + 1)}`;
+    await writeFile(yamlPath(directory), edited, 'utf8');
+    expect((await store.read(OTHER_KEY, second)).status).toBe('invalid');
+    expect((await store.read(KEY, step())).status).toBe('hit');
+    expect(await store.write('c'.repeat(64), payload('ios'))).toBeUndefined();
+    await expect(store.delete(KEY, step())).rejects.toThrow(/does not read/u);
+    expect(await readFile(yamlPath(directory), 'utf8')).toBe(edited);
+    // Recording the step again under its own key is the repair.
+    expect(await store.write(OTHER_KEY, payload('web', { recordedFor: second }))).toBeDefined();
+    expect((await store.read(OTHER_KEY, second)).status).toBe('hit');
   });
 
   it('refuses to write a file over its byte cap', async () => {
