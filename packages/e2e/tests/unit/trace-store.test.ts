@@ -626,6 +626,16 @@ describe('FileCacheStore', () => {
     expect((await pending).status).toBe('hit');
   });
 
+  it('lists without waiting on a lock beside files the store never wrote', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    await writeFile(path.join(directory, 'aaa.yml'), 'on: push\n', 'utf8');
+    await writeFile(path.join(directory, '.aaa.writing'), 'pid 42\n', 'utf8');
+    const started = Date.now();
+    expect((await store.list()).map((file) => file.name)).toEqual([NAME]);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('lists a test only once a writer of it is done', async () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload());

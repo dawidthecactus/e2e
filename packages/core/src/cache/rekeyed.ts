@@ -56,6 +56,8 @@ export class StoredRecordings {
       this.listing ??= this.list();
       listing = await this.listing;
     } catch {
+      // A listing that failed (a test's lock held past the wait, say) is tried again by the next step.
+      this.listing = undefined;
       return undefined;
     }
     for (const candidate of listing.get(key) ?? []) {

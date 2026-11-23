@@ -248,7 +248,10 @@ export class FileCacheStore implements CacheStore {
     }));
     const files: ListedRecordingFile[] = [];
     for (const stem of [...stems].toSorted()) {
-      // Under the lock its writer takes, the test's base name, so a listing never catches a pair half-replaced.
+      // Whose a pair is shows without the lock, from its files' first bytes, so another tool's files
+      // named like a pair never hold a listing up. The store's own are read again under the lock its
+      // writer takes, so a listing never catches one half-replaced.
+      if ((await this.load(stem)) === undefined) continue;
       const file = await this.locked(stem.replace(COLLISION_SUFFIX, ''), () => this.load(stem));
       // One the store cannot tell is its own is not listed: `e2e cache clear` must not delete it.
       if (file !== undefined && file.unconfirmed !== true) files.push(file);
