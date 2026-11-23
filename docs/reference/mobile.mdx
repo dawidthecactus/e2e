@@ -159,8 +159,10 @@ mobile({ platform: 'ios', device: ['iPhone 17', 'iPhone 17 Pro'] });
 - A booted device another agent-device session claims between the inventory
   and the warm-up, such as a host that opened at the same moment, is swapped
   for the next free one. With none free, a run with several workers goes on
-  with one worker fewer. A named device or a provider's lease is never
-  swapped.
+  with one worker fewer. A device that was only busy with a short-lived
+  agent-device command, such as an install, stays bound, and its worker
+  tries it again when it starts. A named device or a provider's lease is
+  never swapped.
 - [Hosted devices](/mobile#hosted-devices) has the `DeviceProvider` contract
   and an example provider.
 

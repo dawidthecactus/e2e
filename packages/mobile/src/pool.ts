@@ -350,7 +350,7 @@ export class DevicePool {
           const kept = bindings[slot]!.session;
           bindings[slot] = kept === undefined ? next : { ...next, session: kept };
         } else if (cause.passing) {
-          info.log(`slot ${slot} keeps ${cause.deviceId}: no other booted device is free, and the worker's start finds it once the command ends`);
+          info.log(`slot ${slot} keeps ${cause.deviceId}: no other booted device is free, and the claim ends with its command, so the worker's start tries it again`);
           slot++;
         } else if (bindings.length > 1) {
           // The slots after this one have not warmed yet: each takes the number below and keeps its own session, which
@@ -464,7 +464,7 @@ export class DevicePool {
     } catch (cause) {
       const holder = movable ? deviceHolder(cause) : undefined;
       if (holder === undefined || binding.deviceId === undefined || !(cause instanceof Error)) throw cause;
-      // A short-lived command's claim after the boot ends with that command, so the worker's start finds the device free.
+      // A short-lived command's claim after the boot ends with that command, so the worker's start may try the device again.
       throw new TakenDevice(binding.deviceId, holder, cause, booted && isShortLivedClaim(cause));
     } finally {
       info.log(`${label}: ${took.join(', ')}`);
