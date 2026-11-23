@@ -28,6 +28,9 @@ const STALE_MS = 30_000;
 /** The tail of the queue of holders in this process, by lock path. */
 const queues = new Map<string, Promise<void>>();
 
+/** The inode of each lock file this process holds, by lock path: how a holder tells its file from a successor's. */
+const heldFiles = new Map<string, number>();
+
 /** Runs `operation` holding the lock at `lockPath`, and releases it however `operation` ends. */
 export async function withFileLock<T>(lockPath: string, operation: () => Promise<T>): Promise<T> {
   const previous = queues.get(lockPath) ?? Promise.resolve();
@@ -39,11 +42,13 @@ export async function withFileLock<T>(lockPath: string, operation: () => Promise
   queues.set(lockPath, tail);
   await previous;
   try {
-    await acquire(lockPath);
+    heldFiles.set(lockPath, await acquire(lockPath));
     try {
       return await operation();
     } finally {
-      await unlink(lockPath).catch(() => undefined);
+      // A holder paused past `STALE_MS` lost the lock to a takeover: the file there now is its successor's.
+      if (await holdsFileLock(lockPath)) await unlink(lockPath).catch(() => undefined);
+      heldFiles.delete(lockPath);
     }
   } finally {
     release();
@@ -51,13 +56,29 @@ export async function withFileLock<T>(lockPath: string, operation: () => Promise
   }
 }
 
-async function acquire(lockPath: string): Promise<void> {
+/**
+ * Whether this process still holds the lock at `lockPath` it took, or took
+ * none there: a holder that stalled past `STALE_MS` (a suspended machine, a
+ * starved CPU) may have been taken over, and must not then publish what it
+ * read before or remove its successor's lock.
+ */
+export async function holdsFileLock(lockPath: string): Promise<boolean> {
+  const ino = heldFiles.get(lockPath);
+  if (ino === undefined) return true;
+  return stat(lockPath).then((stats) => stats.ino === ino, () => false);
+}
+
+/** Takes the lock file, returning its inode. */
+async function acquire(lockPath: string): Promise<number> {
   const deadline = Date.now() + WAIT_MS;
   for (;;) {
     try {
       const handle = await open(lockPath, 'wx', 0o600);
-      await handle.close();
-      return;
+      try {
+        return (await handle.stat()).ino;
+      } finally {
+        await handle.close();
+      }
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
     }

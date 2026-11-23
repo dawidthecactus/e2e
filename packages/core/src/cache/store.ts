@@ -27,7 +27,7 @@ import { writeFilesAtomic } from '../internal/atomic-write.ts';
 import { errorMessage } from '../internal/errors.ts';
 import { canonicalJson, timestamp } from '../internal/ids.ts';
 import { bound } from '../internal/text.ts';
-import { withFileLock } from './file-lock.ts';
+import { holdsFileLock, withFileLock } from './file-lock.ts';
 import {
   parseLockAlone,
   parseRecordingFile,
@@ -329,6 +329,11 @@ export class FileCacheStore implements CacheStore {
     return withFileLock(join(this.directory, `.${base}.writing`), operation);
   }
 
+  /** The lock file a pair's writers take: its test's base name's. */
+  private lockPath(name: string): string {
+    return join(this.directory, `.${name.replace(COLLISION_SUFFIX, '')}.writing`);
+  }
+
   /**
    * The pair holding `testId`'s recordings, readable or not: its own name,
    * or the colliding one when another test holds that. The colliding name
@@ -453,6 +458,8 @@ export class FileCacheStore implements CacheStore {
     // What reads back is what replays, and the lock's digests are taken from it, so a value the YAML
     // cannot carry as written would replay changed without a word: such a pair is not written.
     if (!(await readsBack(yaml, lock, kept))) return undefined;
+    // Rendered from what was read under the lock: published only while the lock is still this writer's.
+    if (!(await holdsFileLock(this.lockPath(name)))) return undefined;
     await mkdir(this.directory, { recursive: true });
     await writeFilesAtomic(
       [
@@ -465,6 +472,7 @@ export class FileCacheStore implements CacheStore {
   }
 
   private async remove(name: string): Promise<void> {
+    if (!(await holdsFileLock(this.lockPath(name)))) throw new Error(`lost the lock on ${name} to another writer`);
     for (const extension of [RECORDING_EXTENSION, LOCK_EXTENSION]) {
       try {
         await unlink(this.path(name, extension));

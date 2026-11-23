@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { instructionDigest, paramsDigest } from '@e2e-dev/core/lib/cache/identity';
+import { holdsFileLock, withFileLock } from '@e2e-dev/core/lib/cache/file-lock';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES, recordingFileName } from '@e2e-dev/core/lib/cache/store';
 import { MAX_TRACE_TEST_ID_CHARS, type ActionTrace, type TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
 import { bound } from '@e2e-dev/core/lib/internal/text';
@@ -362,6 +363,19 @@ describe('FileCacheStore', () => {
     expect(await readFile(foreign, 'utf8')).toBe('pid 42\n');
     await rm(foreign);
     expect(await pending).toBeDefined();
+  });
+
+  it('knows when a stalled holder lost its lock, and leaves the successor\'s in place', async () => {
+    const { directory } = await makeStore();
+    const lock = path.join(directory, '.test.writing');
+    await withFileLock(lock, async () => {
+      expect(await holdsFileLock(lock)).toBe(true);
+      // Taken over while this holder stalled past the stale age: the file there now is another writer's.
+      await rm(lock);
+      await writeFile(lock, '', 'utf8');
+      expect(await holdsFileLock(lock)).toBe(false);
+    });
+    expect(await readdir(directory)).toEqual(['.test.writing']);
   });
 
   it('lets one of several processes at a time take over a stale lock', async () => {
