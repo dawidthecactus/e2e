@@ -58,6 +58,7 @@ test.describe('browser fixture', { requires: ['browser'], tags: ['browser'] }, (
       setTimeout(() => {
         throw new Error('thrown');
       });
+      return null;
     });
     await expect.poll(async () => (await browser.pageErrors()).map((error) => error.message).toSorted()).toEqual(['rejected', 'thrown']);
     expect(await browser.consoleMessages()).toEqual([{ type: 'error', text: 'broken 42' }]);
