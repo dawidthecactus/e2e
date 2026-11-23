@@ -133,6 +133,22 @@ export interface WebResponse {
   text(): Promise<string>;
 }
 
+/** A message the page logged to the console, as `browser.consoleMessages` returns it. */
+export interface WebConsoleMessage {
+  /** The console method, as Playwright names it: `'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, and the rest. */
+  readonly type: string;
+  /** The message text. */
+  readonly text: string;
+}
+
+/** An error the page threw and nothing caught, or a promise rejection nothing handled. */
+export interface WebPageError {
+  /** The error message. */
+  readonly message: string;
+  /** The stack the browser reported; empty when it reported none. */
+  readonly stack: string;
+}
+
 /**
  * Reads the body once the response is known and keeps the outcome: a body
  * that arrived returns a copy of its bytes on every call, a body the browser could not
@@ -298,6 +314,10 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
+  /** Returns the console messages the active tab logged since it opened, up to the latest 200. */
+  consoleMessages(): Promise<WebConsoleMessage[]>;
+  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, up to the latest 200. */
+  pageErrors(): Promise<WebPageError[]>;
   /**
    * Adds a script every document runs before the page's own, from the next
    * navigation on: JavaScript source, a `{ path }` relative to the project
@@ -663,6 +683,16 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
       });
       return decodeEvaluation(report) as T;
     },
+    consoleMessages: () =>
+      surface.guard(context.operation(), 'consoleMessages', async () => {
+        const messages = await surface.requirePage().consoleMessages({ filter: 'all' });
+        return messages.map((message) => ({ type: message.type(), text: message.text() }));
+      }),
+    pageErrors: () =>
+      surface.guard(context.operation(), 'pageErrors', async () => {
+        const errors = await surface.requirePage().pageErrors({ filter: 'all' });
+        return errors.map((error) => ({ message: error.message, stack: error.stack ?? '' }));
+      }),
     async addInitScript(script: unknown, ...rest: unknown[]) {
       const source = await testInitScriptSource(script, rest.length === 0 ? undefined : { arg: rest[0] }, (file) => surface.projectPath(file));
       await surface.guard(context.operation(), 'addInitScript', () => surface.addInitScript(source));
@@ -964,6 +994,8 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
     title: action,
     waitForURL: { ...navigationCall, verifies: true, label: patternLabel },
     evaluate: action,
+    consoleMessages: action,
+    pageErrors: action,
     addInitScript: { ...action, label: (script) => initScriptLabel(script) },
     route: { ...action, label: patternLabel },
     unroute: { ...action, label: patternLabel },
