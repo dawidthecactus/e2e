@@ -1145,7 +1145,8 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
 - `callTool(name, input)` resolves with what the tool's `execute` resolved
   to, usually an object with a `content` array. `input` is JSON; left out or
   `null`, the tool gets an empty object. A result with `isError: true` comes back as it is, and
-  a tool that resolves with nothing gives `null`.
+  a tool that resolves with nothing gives `null`. The result is JSON, so a
+  property the tool left `undefined` is not in it.
 - A tool that sends the page to another URL ends the call before it answers.
   The call fails with `ACTION_FAILED` once the new page has loaded, and the
   message says the tool may have run. A tool still running when the time runs

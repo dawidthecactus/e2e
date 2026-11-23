@@ -28,7 +28,6 @@ export type {
   Browser,
   BrowserExpectation,
   BrowserTab,
-  WebMcpTool,
   Cookie,
   CookieFields,
   CookieFilter,
@@ -39,6 +38,7 @@ export type {
   WebResponse,
   WebRoute,
 } from './browser.ts';
+export type { WebMcpTool } from './webmcp.ts';
 
 export type { WebApp, WebFixtures } from './fixtures.ts';
 

@@ -2,36 +2,54 @@
 import type { Browser, WebMcpTool, WebOptions } from '../../src/index.ts';
 import type { JsonValue } from '@e2e-dev/core';
 
-/** True only when both types are the same; `any` on either side is a mismatch, which `satisfies` would let through. */
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-declare function exact<Expected>(): <Actual>(value: Actual, same: Equal<Actual, Expected>) => void;
+/** True only when A and B are the same type: `any`, `unknown`, and a dropped `readonly` all fail it. */
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+/** Compiles only when given `true`. */
+function assertTrue<T extends true>(): T | undefined {
+  return undefined;
+}
 
-declare const browser: Browser;
+type WebMcp = Browser['webmcp'];
 
-exact<{
-  tools(): Promise<readonly WebMcpTool[]>;
-  callTool(name: string, input?: JsonValue): Promise<JsonValue>;
-}>()(browser.webmcp, true);
-exact<Promise<readonly WebMcpTool[]>>()(browser.webmcp.tools(), true);
-exact<Promise<JsonValue>>()(browser.webmcp.callTool('add', { a: 2, b: 40 }), true);
-exact<Promise<JsonValue>>()(browser.webmcp.callTool('refresh'), true);
-
-declare const tool: WebMcpTool;
-exact<{
+assertTrue<Equal<WebMcpTool, {
   readonly name: string;
   readonly description: string;
   readonly inputSchema?: JsonValue;
-  readonly annotations?: { readonly readOnly?: boolean; readonly untrustedContent?: boolean; readonly consequential?: boolean };
-}>()(tool, true);
+  readonly annotations?: {
+    readonly readOnly?: boolean;
+    readonly untrustedContent?: boolean;
+    readonly consequential?: boolean;
+  };
+}>>();
+assertTrue<Equal<Parameters<WebMcp['tools']>, []>>();
+assertTrue<Equal<ReturnType<WebMcp['tools']>, Promise<readonly WebMcpTool[]>>>();
+assertTrue<Equal<Parameters<WebMcp['callTool']>, [name: string, input?: JsonValue | undefined]>>();
+assertTrue<Equal<ReturnType<WebMcp['callTool']>, Promise<JsonValue>>>();
 
+declare const browser: Browser;
+declare const tools: Awaited<ReturnType<WebMcp['tools']>>;
+declare const tool: WebMcpTool;
+
+browser.webmcp.callTool('add', { a: 2, b: 40 });
+browser.webmcp.callTool('refresh');
+browser.webmcp.callTool('refresh', null);
 // @ts-expect-error a tool name is a string
-void browser.webmcp.callTool(42);
+browser.webmcp.callTool(42);
 // @ts-expect-error input is JSON, so it holds no function
-void browser.webmcp.callTool('add', { a: () => 2 });
-// @ts-expect-error the page's `readOnlyHint` is published as `readOnly`
+browser.webmcp.callTool('add', { a: () => 2 });
+// @ts-expect-error input is JSON, so it holds no Date
+browser.webmcp.callTool('add', { at: new Date() });
+// @ts-expect-error the list is read-only
+tools.push(tool);
+// @ts-expect-error a tool is read-only
+tool.name = 'renamed';
+// @ts-expect-error the hint is `readOnly`, not the spec's `readOnlyHint`
 void tool.annotations?.readOnlyHint;
+declare const other: Browser;
+// @ts-expect-error the member cannot be replaced
+browser.webmcp = other.webmcp;
 
-exact<boolean | undefined>()(({} as WebOptions).webmcp, true);
+assertTrue<Equal<WebOptions['webmcp'], boolean | undefined>>();
 void ({ webmcp: true } satisfies WebOptions);
 // @ts-expect-error webmcp is a boolean
 void ({ webmcp: 'on' } satisfies WebOptions);

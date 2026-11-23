@@ -57,13 +57,30 @@ const TOOLS_PAGE = `<!doctype html>
   });
 </script>`;
 
-/** A page whose tools resolve with values JSON cannot hold. */
+/** What the throwing tools of the odd page throw: text an engine would otherwise read as the browser's own report. */
+const BROWSER_LIKE_MESSAGES = {
+  closed: 'Target closed',
+  destroyed: 'Execution context was destroyed, most likely because of a navigation',
+  disabled: 'WebMCP is not enabled',
+} as const;
+
+/**
+ * A page whose tools resolve with values JSON cannot hold, or with `undefined`
+ * inside the result, and tools that throw what a browser would say.
+ */
 const ODD_PAGE = `<!doctype html>
 <title>odd</title>
 <script>
   const context = document.modelContext ?? navigator.modelContext;
   for (const [name, value] of [['date', () => new Date(0)], ['bigint', () => 1n], ['nan', () => NaN]]) {
     context?.registerTool({ name, description: 'Resolves with a ' + name, inputSchema: { type: 'object' }, execute: async () => value() });
+  }
+  context?.registerTool({
+    name: 'sparse', description: 'Resolves with undefined inside', inputSchema: { type: 'object' },
+    execute: async () => ({ ok: true, detail: undefined, none: null, list: [1, undefined, { gone: undefined }] }),
+  });
+  for (const [name, text] of Object.entries(${JSON.stringify(BROWSER_LIKE_MESSAGES)})) {
+    context?.registerTool({ name, description: 'Throws ' + text, inputSchema: { type: 'object' }, execute: async () => { throw new Error(text); } });
   }
 </script>`;
 
@@ -186,7 +203,7 @@ describe('browser.webmcp', () => {
 
     it.skipIf(!installed)('gives the tool an object when the input is left out or null, and resolves with null when the tool resolves with nothing', async () => {
       expect(await browser.webmcp.callTool('echo')).toEqual({ content: [{ type: 'text', text: 'object' }] });
-      // Playwright sends an empty object for a null input too, so a tool never sees null.
+      // A null input is sent as an empty object too, so a tool never sees null.
       expect(await browser.webmcp.callTool('echo', null)).toEqual({ content: [{ type: 'text', text: 'object' }] });
       expect(await browser.webmcp.callTool('echo', { silent: true })).toBeNull();
     });
@@ -205,7 +222,7 @@ describe('browser.webmcp', () => {
     });
 
     it.skipIf(!installed)('reads a missing tool as missing, whatever its name says', async () => {
-      // Playwright's message repeats the requested name, which must not be read as a browser diagnostic.
+      // The message repeats the requested name, which must not be read as the browser's own report.
       for (const missing of ['WebMCP is not enabled', 'execution context was destroyed', 'target closed']) {
         await expect(browser.webmcp.callTool(missing)).rejects.toMatchObject({
           code: 'ACTION_FAILED',
@@ -218,8 +235,19 @@ describe('browser.webmcp', () => {
       await expect(browser.webmcp.callTool('refuse')).rejects.toMatchObject({
         code: 'ACTION_FAILED',
         // Chromium reports a fixed message, Firefox the tool's own.
-        message: expect.stringMatching(/^browser\.webmcp\.callTool: .*(Tool execution failed|not today)/),
+        message: `browser.webmcp.callTool: the tool "refuse" failed: ${name === 'firefox' ? 'not today' : 'Tool execution failed.'}`,
       });
+    });
+
+    it.skipIf(!installed)('reads a tool that throws as the tool failing, whatever its message says', async () => {
+      await engine.session!.open!(`${origin}/odd`, operation());
+      for (const [tool, text] of Object.entries(BROWSER_LIKE_MESSAGES)) {
+        await expect(browser.webmcp.callTool(tool)).rejects.toMatchObject({
+          code: 'ACTION_FAILED',
+          message: `browser.webmcp.callTool: the tool "${tool}" failed: ${name === 'firefox' ? text : 'Tool execution failed.'}`,
+        });
+      }
+      await engine.session!.open!(`${origin}/`, operation());
     });
 
     it.skipIf(!installed)('refuses a name that is not a non-empty string, and input that is not JSON', async () => {
@@ -228,10 +256,17 @@ describe('browser.webmcp', () => {
       await expect(browser.webmcp.callTool('add', { a: () => 1 } as never)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     });
 
+    it.skipIf(!installed)('resolves with the result as JSON carries it: an undefined property is left out, and null stays', async () => {
+      await engine.session!.open!(`${origin}/odd`, operation());
+      // `toStrictEqual`, because `toEqual` takes an undefined property for a missing one.
+      expect(await browser.webmcp.callTool('sparse')).toStrictEqual({ ok: true, none: null, list: [1, null, {}] });
+      await engine.session!.open!(`${origin}/`, operation());
+    });
+
     it.skipIf(!installed)('resolves with JSON only: a result JSON cannot hold fails the call, after the tool ran', async () => {
       await engine.session!.open!(`${origin}/odd`, operation());
       if (name === 'chromium') {
-        // Chromium turns a tool's result into JSON itself before Playwright reads it.
+        // Chromium turns a tool's result into JSON itself before the engine reads it.
         expect(await browser.webmcp.callTool('date')).toBe('1970-01-01T00:00:00.000Z');
         expect(await browser.webmcp.callTool('bigint')).toBe(1);
         expect(await browser.webmcp.callTool('nan')).toBe('NaN');
