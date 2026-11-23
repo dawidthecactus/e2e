@@ -105,6 +105,8 @@ export class FileCacheStore implements CacheStore {
 
   private readonly directory: string;
   private readonly maxBytes: number;
+  /** Each pair as last read, beside the identity of its files then (`load`). */
+  private readonly loaded = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
   /** The steps read for each test, in the order they were read: where a step new to a file goes (`placeFor`). */
   private readonly readOrder = new Map<string, string[]>();
 
@@ -275,6 +277,20 @@ export class FileCacheStore implements CacheStore {
    * the store wrote it is not one.
    */
   private async load(name: string): Promise<LoadedFile | undefined> {
+    // Every step of a test reads its whole pair; parse it again only when a file changed.
+    // A rewrite renames a new file into place, so its inode changes even within one mtime tick.
+    const stamps = await Promise.all([RECORDING_EXTENSION, LOCK_EXTENSION].map((extension) =>
+      stat(this.path(name, extension)).then((stats) => `${stats.ino}:${stats.size}:${stats.mtimeMs}`, () => '-'),
+    ));
+    const stamp = stamps.join(' ');
+    const known = this.loaded.get(name);
+    if (known?.stamp === stamp) return known.file;
+    const file = await this.readPair(name);
+    this.loaded.set(name, { stamp, file });
+    return file;
+  }
+
+  private async readPair(name: string): Promise<LoadedFile | undefined> {
     const yaml = await this.readCapped(this.path(name, RECORDING_EXTENSION));
     const lock = await this.readCapped(this.path(name, LOCK_EXTENSION));
     if (!writtenByStore(yaml?.head, lock?.head)) return undefined;
