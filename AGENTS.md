@@ -745,7 +745,8 @@ trees, on both platforms, without a device.
     config file, the environment, the app) and fill one into whatever field
     it likes. Its result passes the secret ledger, which replaces a secret's
     exact value only: that prevents accidents and is not a boundary. An
-    accepted exception to the first invariant and to the fill rule above.
+    accepted exception to the first invariant and to the fill rule above. On
+    by default by design (maintainer decision): no flag or config gates it.
     App content, ledger text, and pixels are quoted as untrusted
     evidence with no policy authority.
   - Every navigation a test or the agent asks for (`app.open`,

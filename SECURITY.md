@@ -59,8 +59,10 @@ secret and credential, from the config file, the environment, or the app.
 What it returns has the exact value of each one redacted, which prevents
 accidents and is not a boundary: the code can return a secret in a changed
 form. This is the one exception to the rule below, and to the rule that a
-password goes only into a password field. Don't connect an agent you don't
-trust with the project.
+password goes only into a password field. `run_code` is on by default, by
+design: every `e2e mcp` server offers it and no flag turns it off, and a
+client that approves the server's `call` tool approves `run_code` with it.
+Don't connect an agent you don't trust with the project.
 
 Secrets follow from that split. A `Secret` value never reaches model input,
 digests, logs, reports, or artifacts as text. A secret fill is authorized by the runner from

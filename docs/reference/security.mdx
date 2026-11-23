@@ -67,6 +67,8 @@ larger budget. [How agent steps work](/agent-steps) explains a step in full.
   the app, and can return one in a changed form. Don't connect an agent you
   don't trust with the project's files and secrets, and note that a client
   which confines the agent's shell may still run this server outside it.
+  `run_code` is on by default, and no flag turns it off: a client that
+  approves the server's `call` tool approves `run_code` with it.
 
 | Fails with | When |
 | --- | --- |

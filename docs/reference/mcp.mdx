@@ -320,7 +320,9 @@ Test lines: 2, 1 read not listed.
 
 The code is not confined. It has the authority of a test file: it can
 import modules, read files, and read the values the app shows, a secret
-included. See [Security](/reference/security).
+included. `run_code` is on by default: every `e2e mcp` server offers it, no
+flag turns it off, and a client that approves `call` approves `run_code`
+with it. See [Security](/reference/security).
 
 | Throws | When |
 | --- | --- |
