@@ -296,6 +296,37 @@ return { added: after - before, code, items };`,
     expect(still.text).toMatch(/^Returned: "alive"\n/);
   });
 
+  it('gives the call an error its handler left in the engine, ends at an error nothing caught, and stays up', async () => {
+    // The engine calls a route handler from its own connection, outside the code's turn.
+    const handled = await runCode(`await browser.route('**/*', (route) => { setTimeout(() => { throw new Error('in a handler'); }, 0); return route.continue(); });
+await browser.reload();
+await new Promise((resolve) => setTimeout(resolve, 200));
+return 'done';`);
+    expect(handled.isError, handled.text).toBe(true);
+    expect(handled.text).toMatch(/^Failed: Error: in a handler/);
+    expect((await runCode("await browser.unrouteAll();\nreturn 'alive';")).text).toMatch(/^Returned: "alive"\n/);
+
+    // The code never settles after the error, and the call does not wait out its five minutes for it.
+    const started = Date.now();
+    const stuck = await runCode('await new Promise((resolve) => setTimeout(() => { nowhere.call(); resolve(); }, 50));');
+    expect(stuck.text).toMatch(/^Failed: ReferenceError: nowhere is not defined/);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it('returns what a race of two lines gave, and names a locator the code returned', async () => {
+    const raced = await runCode(
+      "return await Promise.race([screen.getByRole('button', 'Increment').waitFor().then(() => 'found'), screen.getByRole('button', 'Nowhere').waitFor().then(() => 'never')]);",
+      300,
+    );
+    expect(raced.isError, raced.text).toBe(false);
+    expect(raced.text).toMatch(/^Returned: "found"\n/);
+    expect(raced.text).not.toContain('not awaited');
+    const named = await runCode("return { button: screen.getByRole('button', 'Increment') };");
+    expect(named.text).toMatch(/^Returned: \{"button":"screen\.getByRole\('button', 'Increment'\)"\}\n/);
+    const missing = await runCode("const { readFileSync } = await import('node:fs');\nreadFileSync('/nowhere/at/all');");
+    expect(missing.text).toMatch(/^Failed: Error: ENOENT: .* \(line 2:\d+\)\n/);
+  });
+
   it('stops a cancelled call, whether it swallows every failure or waits on the app, and keeps a list a real array', async () => {
     // Left alone each of these holds the call for minutes, and the session takes one call at a time.
     for (const code of ["for (;;) { try { await screen.getByRole('button', 'Nowhere').tap(); } catch {} }", 'await browser.evaluate(() => new Promise(() => {}));']) {

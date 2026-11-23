@@ -152,6 +152,8 @@ call {tool: "tap", args: {target: "n42"}, session: "<id>"}
 | `args` | object | no | The tool's arguments. |
 | `session` | string | while several are open | The session id. |
 
+- The tool's arguments can also sit beside `tool`, without `args`:
+  `call {tool: "tap", target: "n42"}`. Passing both is `INVALID_ARGUMENT`.
 - Arguments are validated against the tool's closed schema first. A wrong
   type, or an argument a tool that declares arguments does not declare, is
   `INVALID_ARGUMENT`, and nothing runs. `back` and `dismiss_keyboard` take no
@@ -285,7 +287,8 @@ Test lines: 2, 1 read not listed.
   the passing lines left it.
 - `await` each line. A failure nothing awaited fails the call. So does a
   promise the code left to reject, and an error a `setTimeout` callback
-  throws.
+  throws: the call ends there. An error a handler leaves after its call ended
+  is a warning in the server's log.
 - The result lists the lines that ran. A read shows its value there when the
   code returns nothing and logs nothing. Otherwise `return` the value.
 - The lines that pass, except reads, join the [`test_lines`](#test_lines)

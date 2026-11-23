@@ -130,6 +130,7 @@ call {tool: "tap", args: {target: "n42"}, session: "<id>"}
 | `args` | object | 否 | 工具参数。 |
 | `session` | string | 打开多个会话时 | 会话 ID。 |
 
+- 工具参数也可以不放在 `args` 中，而是与 `tool` 并列传入：`call {tool: "tap", target: "n42"}`。两种方式同时使用会返回 `INVALID_ARGUMENT`。
 - 首先按工具的封闭 schema 验证参数。类型错误，或向声明了参数的工具传入未声明的参数，会返回 `INVALID_ARGUMENT`，且不执行任何操作。`back` 和 `dismiss_keyboard` 不接受参数；它们会丢弃收到的所有参数并执行。
 - 失败的操作会返回错误结果，其中仍包含重新观察到的屏幕。结果以工具、操作目标和代码开头：`navigate file:///etc/passwd failed: POLICY_DENIED: forbidden URL scheme: file:`。
 - 项目工具遵循其 AI SDK `toModelOutput` 渲染器，包括 `execute` 返回字符串的情况。渲染后的 `error-text` 和 `error-json` 输出是 MCP 错误结果（`isError: true`）。编码智能体可以区分失败和成功的工具调用。
@@ -224,7 +225,7 @@ Test lines: 2, 1 read not listed.
 - 代码是在服务器的 Node 进程中运行的普通 JavaScript，作用域内的对象就是测试体得到的对象。调用的等待、匹配和失败方式与测试相同，你传入的函数（例如 `browser.route` 的处理函数）也会像在测试中一样被调用。
 - `return` 一个 JSON 值即可将其取回。`console.log` 输出的内容也会返回。
 - 失败的代码行会抛出测试中会得到的错误，并带有其 `code`。如果未被捕获，代码会停止，结果为错误结果。应用保持在已通过代码行留下的状态。
-- 请对每行代码使用 `await`。没有任何地方 `await` 的失败会使调用失败。代码遗留的被拒绝的 Promise，以及 `setTimeout` 回调抛出的错误也是如此。
+- 请对每行代码使用 `await`。没有任何地方 `await` 的失败会使调用失败。代码遗留的被拒绝的 Promise，以及 `setTimeout` 回调抛出的错误也是如此：调用会在该处结束。调用结束后处理函数遗留的错误会作为警告写入服务器日志。
 - 结果会列出已运行的代码行。当代码没有返回值也没有输出日志时，读取操作的值也会显示在那里；否则请用 `return` 返回该值。
 - 通过的代码行（读取操作除外）会按执行顺序加入 [`test_lines`](#test_lines) 草稿。以值兑现的调用按读取操作处理；但传入函数的调用（例如 `evaluate` 的页面脚本）可能改变页面，因此会保留在草稿中。调用兑现得到的对象（例如新标签页）会有一行为它命名的 `const` 代码。
 - 对 `screen` 的每个操作或匹配器最多等待 `timeout`。如果配置中的 [`actionTimeout`](/reference/config#actiontimeout) 和 [`assertionTimeout`](/reference/config#assertiontimeout) 更短，则使用更短的值。`app` 和引擎的 fixture 的等待方式与测试相同。

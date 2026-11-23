@@ -86,6 +86,8 @@ export interface TestLineOptions {
   readonly appBase?: { readonly href: string; readonly origin: string } | undefined;
   /** The configured credentials and secrets a fill is written with. */
   readonly fills?: TestLineFills | undefined;
+  /** The engine's fixture names, which a line of `run_code`'s may use anywhere in it. */
+  readonly engineFixtures?: readonly string[] | undefined;
   /** The test the session ran before it went live, as `file:line`: the lines carry on from where it stopped. */
   readonly testRan?: string | undefined;
 }
@@ -216,7 +218,7 @@ export class SessionTestLines {
     // A session that ran a test holds only what came after it: the test's own lines are in its file.
     const [lead, place] =
       testRan === undefined
-        ? [`Draft test body from this session's actions, ${count}:`, `Paste it into a test body, async ({ ${fixturesIn(body).join(', ')} }) => { ... },`]
+        ? [`Draft test body from this session's actions, ${count}:`, `Paste it into a test body, async ({ ${fixturesIn(body, this.options.engineFixtures ?? []).join(', ')} }) => { ... },`]
         : [`Test lines from this session's actions after test ${testRan} stopped, ${count}:`, 'Put them in that test where it stopped, in place of the line that failed or after its last line,'];
     return [
       lead,
@@ -675,9 +677,11 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 const IMPORTED: ReadonlySet<string> = new Set(['expect', 'credentials', 'secrets']);
 
 /** The fixtures a draft's lines start from, `app` and `screen` first, so the test body asks for each one. */
-function fixturesIn(body: readonly string[]): readonly string[] {
+function fixturesIn(body: readonly string[], engine: readonly string[]): readonly string[] {
   const declared = new Set(body.flatMap((line) => /^const ([A-Za-z_$][\w$]*) = /.exec(line)?.[1] ?? []));
   const named = body.flatMap((line) => /^(?:const [A-Za-z_$][\w$]* = )?await (?:expect\()?([A-Za-z_$][\w$]*)[.(]/.exec(line)?.[1] ?? []);
   // `expect` and the secret handles are imports, not fixtures.
-  return [...new Set(['app', 'screen', ...named.filter((name) => !declared.has(name) && !IMPORTED.has(name))])];
+  // An engine's fixture may be an argument, as in `expect(browser)`, where no line starts from it.
+  const passed = engine.filter((name) => body.some((line) => new RegExp(`(?<![.\\w$'"\`])${name.replaceAll('$', '\\$')}(?=[.(),\\s])`).test(line)));
+  return [...new Set(['app', 'screen', ...[...named, ...passed].filter((name) => !declared.has(name) && !IMPORTED.has(name))])];
 }

@@ -96,6 +96,7 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
     redact: options.redaction.redact,
     appBase: options.appBase,
     fills: options.fills,
+    engineFixtures: options.runCode?.engineFixtures,
     testRan: options.testRan,
   });
   const context = lines.watch(options.context);

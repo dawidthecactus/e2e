@@ -19,7 +19,7 @@ import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { z } from 'zod';
 import type { StepExecutorContext } from '@e2e-dev/core/lib/agent/executor';
 import type { ScreenPresenter } from '@e2e-dev/core/lib/agent/screen-update';
-import { classifyError, codedMessage, TestError } from '@e2e-dev/core/lib/internal/errors';
+import { asEngineError, classifyError, codedMessage, isE2EError, TestError } from '@e2e-dev/core/lib/internal/errors';
 import { cancelledError, withAbort, withTimeout } from '@e2e-dev/core/lib/internal/time';
 import { createScreen } from '@e2e-dev/core/lib/locator/screen';
 import { createScreenContext } from '@e2e-dev/core/lib/run/fixtures';
@@ -151,36 +151,51 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   const recorder = new Recorder(redact, nextHandle);
   const logs: string[] = [];
   const stray: unknown[] = [];
-  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder), console: logging(logs) };
-  // Aborted with the call's own timeout; with the caller's cancel it is what ends the operation the code is in the middle of.
-  const timeout = new AbortController();
-  const cut = signal === undefined ? timeout.signal : AbortSignal.any([signal, timeout.signal]);
+  const plain = (value: unknown): unknown => redacted(value, redact, (item) => recorder.textOf(item));
+  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder), console: logging(logs, plain) };
+  // Aborted when the call ends the code itself, at its timeout or an error nothing caught; with the caller's cancel it is what ends the operation the code is in the middle of.
+  const stop = new AbortController();
+  const cut = signal === undefined ? stop.signal : AbortSignal.any([signal, stop.signal]);
+  // An error nothing in the code caught ends the call there, as it ends a process: the code may never settle after it.
+  let strayed = (_cause: unknown): void => undefined;
+  const firstStray = new Promise<never>((_, reject) => void (strayed = reject));
+  firstStray.catch(() => undefined);
   let value: unknown;
   let thrown: { readonly cause: unknown } | undefined;
   let end = (): void => undefined;
   try {
     const body = compile(args.code, Object.keys(scope));
-    const call = asRunCodeCall((cause) => void stray.push(cause), () => body(scope));
+    const call = asRunCodeCall(
+      (cause) => {
+        stray.push(cause);
+        strayed(cause);
+      },
+      () => body(scope),
+    );
     end = call.end;
-    // The code is left behind at a cancel or the timeout: it may never settle.
-    const run = (): Promise<unknown> => (signal === undefined ? call.result : withAbort(call.result, signal, cancelledError));
+    // The code is left behind at a cancel, the timeout, or a stray error: it may never settle.
+    const run = (): Promise<unknown> => {
+      const result = Promise.race([call.result, firstStray]);
+      return signal === undefined ? result : withAbort(result, signal, cancelledError);
+    };
     const timedOut = (): Error => {
-      timeout.abort();
+      stop.abort();
       return new TestError('ACTION_FAILED', `run_code: the code did not finish within ${String(PROGRAM_TIMEOUT_MS)} ms`);
     };
     // The cap ends with the race, so the session's budget is its own again whatever the code does.
     value = await attempt.budget.capped(PROGRAM_TIMEOUT_MS, () => withTimeout(run(), PROGRAM_TIMEOUT_MS, timedOut), cut);
   } catch (cause) {
     thrown = { cause };
+    if (stray[0] === cause) stop.abort();
   }
   // A promise the code left rejected in its last turn is reported once that turn is over.
   await new Promise((resolve) => setImmediate(resolve));
-  const { unawaited, lost } = await recorder.end(cut.aborted);
+  const { unawaited, lost } = await recorder.end(cut);
   end();
   if (unawaited > 0) logs.push(`${String(unawaited)} call(s) on the app were not awaited when the code ended; they ran, but await each one so a failure stops the code.`);
   // What the code threw first; then a failure it never waited on, which reached nothing in it.
   const failure = thrown ?? [lost, ...stray].flatMap((cause) => (cause === undefined ? [] : [{ cause }]))[0];
-  const ended: Ended = { value: failure === undefined ? redacted(value, redact) : undefined, error: failure === undefined ? undefined : describe(failure.cause, Object.keys(scope)), logs };
+  const ended: Ended = { value: failure === undefined ? plain(value) : undefined, error: failure === undefined ? undefined : describe(failure.cause, Object.keys(scope)), logs };
   const { outcomes } = recorder;
   if (ended.error !== undefined) options.onFailed?.(ended.error.code ?? 'ERROR');
   options.record?.(outcomes.flatMap((outcome) => ('error' in outcome || outcome.read ? [] : [outcome.source])));
@@ -270,14 +285,15 @@ function syntaxLine(source: string): string {
 }
 
 /** `console` for the code: the server's stdout is the MCP stream, so what it logs comes back in the result. */
-function logging(logs: string[]): Pick<Console, 'log' | 'info' | 'debug' | 'warn' | 'error'> {
-  const log = (...values: unknown[]): void => void logs.push(values.map((value) => (typeof value === 'string' ? value : show(value))).join(' '));
+function logging(logs: string[], plain: (value: unknown) => unknown): Pick<Console, 'log' | 'info' | 'debug' | 'warn' | 'error'> {
+  const log = (...values: unknown[]): void => void logs.push(values.map((value) => (typeof value === 'string' ? value : show(plain(value)))).join(' '));
   return { log, info: log, debug: log, warn: log, error: log };
 }
 
 /** An error as the result names it: a runner error by its code, another by its name and where in the code it was thrown. */
 function describe(cause: unknown, names: readonly string[]): NonNullable<Ended['error']> {
-  if (cause instanceof Error && typeof Reflect.get(cause, 'code') === 'string') {
+  // Node's own errors carry a code too, such as ENOENT, and read better by name and line.
+  if (isE2EError(cause) || asEngineError(cause) !== undefined) {
     const { code, message } = classifyError(cause);
     return { code, message };
   }
@@ -290,14 +306,17 @@ function describe(cause: unknown, names: readonly string[]): NonNullable<Ended['
 }
 
 /** A value with every string in it through the ledger, before it is written as JSON, where an escaped value would pass unseen. */
-function redacted(value: unknown, redact: (text: string) => string, depth = 0): unknown {
+function redacted(value: unknown, redact: (text: string) => string, textOf: (value: unknown) => string | undefined = () => undefined, depth = 0): unknown {
   if (typeof value === 'string') return redact(value);
   if (typeof value === 'bigint') return redact(String(value));
+  // A locator or a fixture the code holds reads as the test line that names it, not as the real object's insides.
+  const text = textOf(value);
+  if (text !== undefined) return redact(text);
   if (typeof value !== 'object' || value === null || depth > 50) return value;
-  if (Array.isArray(value)) return value.map((item) => redacted(item, redact, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => redacted(item, redact, textOf, depth + 1));
   const prototype: unknown = Reflect.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redacted(item, redact, depth + 1)]));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redacted(item, redact, textOf, depth + 1)]));
 }
 
 /** The most lines the result spells out; a longer run shows its first and last ones. */

@@ -6,6 +6,7 @@
  * promise is a line, and what it settled with is its outcome.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { classifyError, type E2EError } from '@e2e-dev/core/lib/internal/errors';
 import { isPlainObject } from '@e2e-dev/core/lib/internal/options';
 
@@ -55,8 +56,6 @@ interface Sent {
   readonly line: Line<unknown>;
   settled: Promise<unknown>;
   failed: { readonly cause: unknown } | undefined;
-  /** Still running when the code ended. */
-  late: boolean;
 }
 
 export class Recorder {
@@ -66,6 +65,8 @@ export class Recorder {
   private readonly proxies = new WeakMap<object, object>();
   /** The test-line text of an object a get or a call gave the code. */
   private readonly sources = new WeakMap<object, string>();
+  /** Each function of the code as the real objects hold it. */
+  private readonly handlers = new WeakMap<object, object>();
   private readonly sent: Sent[] = [];
   private readonly pending = new Set<Sent>();
   private turn: Turn = 'running';
@@ -88,7 +89,7 @@ export class Recorder {
     if (known !== undefined) return known as T;
     // Not `real` itself: a frozen fixture's members could not be answered with their wrappers.
     const proxy = new Proxy(typeof real === 'function' ? () => undefined : {}, {
-      get: (_, key) => (typeof key === 'symbol' ? Reflect.get(real, key, real) : this.member(real, key, /^\d+$/.test(key) ? `${text}[${key}]` : `${text}.${key}`)),
+      get: (_, key) => (typeof key === 'symbol' ? own(real, key) : this.member(real, key, /^\d+$/.test(key) ? `${text}[${key}]` : `${text}.${key}`)),
       apply: (_, __, args: unknown[]) => this.call(real, undefined, text, args),
       set: (_, key, value) => Reflect.set(real, key, value, real),
       has: (_, key) => Reflect.has(real, key),
@@ -105,29 +106,39 @@ export class Recorder {
     return proxy as T;
   }
 
+  /** The test-line text of something the code holds wrapped, for a result that would otherwise print the real object's insides. */
+  textOf(value: unknown): string | undefined {
+    return (typeof value === 'object' || typeof value === 'function') && value !== null && this.reals.has(value) ? this.sources.get(value) : undefined;
+  }
+
   /**
    * Ends the code's turn and waits for the lines still running, so the app is
-   * where they left it. Code that was `cut` off never runs another call, and
-   * an operation that does not end with the cancel is left behind after a
-   * moment, so the session is not held for it. Code
-   * that settled may have left a handler behind, such as a route's, and what
-   * that calls later runs as it does in a test, unrecorded. Answers the first
-   * failure nothing in the code was there to catch.
+   * where they left it. Once `cut` is aborted, by a timeout or a cancel, the
+   * code never runs another call, and an operation that does not end with the
+   * abort is left behind after a moment, so the session is not held for it.
+   * Code that settled may have left a handler behind, such as a route's, and
+   * what that calls later runs as it does in a test, unrecorded. Answers the
+   * first failure nothing in the code was there to catch.
    */
-  async end(cut: boolean): Promise<{ readonly unawaited: number; readonly lost: unknown }> {
-    this.turn = cut ? 'cut' : 'settled';
-    const unawaited = this.pending.size;
-    for (const sent of this.pending) sent.late = true;
+  async end(cut: AbortSignal): Promise<{ readonly unawaited: number; readonly lost: unknown }> {
+    this.turn = cut.aborted ? 'cut' : 'settled';
+    const unawaited = [...this.pending].filter((sent) => !sent.line.seen).length;
     const settled = (async (): Promise<void> => {
       while (this.pending.size > 0) await Promise.all([...this.pending].map((sent) => sent.settled));
     })();
-    if (!cut) await settled;
-    else {
+    const aborted = new Promise<void>((resolve) => {
+      if (cut.aborted) resolve();
+      else cut.addEventListener('abort', () => void resolve(), { once: true });
+    });
+    await Promise.race([settled, aborted]);
+    if (this.pending.size > 0) {
+      this.turn = 'cut';
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([settled, new Promise((resolve) => void (timer = setTimeout(resolve, CUT_GRACE_MS)))]);
       clearTimeout(timer);
     }
-    const lost = this.sent.find((sent) => sent.failed !== undefined && (sent.late || !sent.line.seen));
+    // A line the code waited on gave its failure to the code, which may have chosen to go on, as the loser of a race does.
+    const lost = this.sent.find((sent) => sent.failed !== undefined && !sent.line.seen);
     return { unawaited, lost: lost?.failed?.cause };
   }
 
@@ -161,6 +172,8 @@ export class Recorder {
     if (this.turn === 'cut') return PARKED;
     const called = `${text}(${args.map((arg) => this.spell(arg, 0)).join(', ')})`;
     const recording = this.turn === 'running';
+    // Asked before the call runs: a line the call itself makes, as a poll's read is, does not run alongside it.
+    const alongside = this.pending.size > 0;
     let returned: unknown;
     try {
       returned = Reflect.apply(method as (...values: unknown[]) => unknown, receiver, args.map((arg) => this.real(arg, 0)));
@@ -169,20 +182,20 @@ export class Recorder {
       throw cause;
     }
     if (!isThenable(returned)) return this.given(returned, called);
-    return recording ? this.line(called, returned, text, args) : Promise.resolve(returned).then((value) => this.given(value, called));
+    return recording ? this.line(called, returned, text, args, alongside) : Promise.resolve(returned).then((value) => this.given(value, called));
   }
 
-  private line(called: string, returned: PromiseLike<unknown>, text: string, args: readonly unknown[]): Promise<unknown> {
+  private line(called: string, returned: PromiseLike<unknown>, text: string, args: readonly unknown[], alongside: boolean): Promise<unknown> {
     const source = `await ${called};`;
     // A line made while another still runs was not written after it: a test that awaits them in turn would wait on the first alone.
-    const note = this.pending.size > 0 ? ' // ran while the line above was still running; a test needs them in one Promise.all' : '';
+    const note = alongside ? ' // ran while the line above was still running; a test needs them in one Promise.all' : '';
     const slot = this.slots.push(undefined) - 1;
     const line = new Line<unknown>((resolve, reject) => {
       returned.then((value) => {
         resolve(this.resolved(value, slot, source, note, text, args));
       }, reject);
     });
-    const sent: Sent = { line, failed: undefined, late: false, settled: Promise.resolve() };
+    const sent: Sent = { line, failed: undefined, settled: Promise.resolve() };
     // Not through the line's own `then`, which would count as the code waiting on it.
     sent.settled = Promise.prototype.then.call(
       line,
@@ -221,6 +234,7 @@ export class Recorder {
     if ((typeof value !== 'object' && typeof value !== 'function') || value === null || depth > MAX_DEPTH) return value;
     const real = this.reals.get(value);
     if (real !== undefined) return real;
+    if (typeof value === 'function') return this.handler(value);
     // Rebuilt only around something wrapped, so an object the code made, or a secret's handle, goes in as itself.
     if (Array.isArray(value)) {
       const items = value.map((item) => this.real(item, depth + 1));
@@ -229,6 +243,30 @@ export class Recorder {
     if (!isPlainObject(value)) return value;
     const entries = Object.entries(value).map(([key, item]) => [key, this.real(item, depth + 1)] as const);
     return entries.every(([key, item]) => item === Reflect.get(value, key)) ? value : Object.fromEntries(entries);
+  }
+
+  /**
+   * A function of the code as the real object gets it: run in the context of
+   * the call that passed it. An engine calls a handler from its own
+   * connection's context, where an error the handler leaves would belong to
+   * no call and reach the process. One function is one handler, so removing
+   * it by itself still finds it.
+   */
+  private handler(code: object): object {
+    const known = this.handlers.get(code);
+    if (known !== undefined) return known;
+    const inCall = AsyncLocalStorage.snapshot();
+    const handler = function (this: unknown, ...args: unknown[]): unknown {
+      return inCall(() => Reflect.apply(code as (...values: unknown[]) => unknown, this, args));
+    };
+    // An engine sends a page script as its text, and a handler may be told apart by its arity.
+    Object.defineProperties(handler, {
+      toString: { value: () => Function.prototype.toString.call(code) },
+      name: { value: Reflect.get(code, 'name') },
+      length: { value: Reflect.get(code, 'length') },
+    });
+    this.handlers.set(code, handler);
+    return handler;
   }
 
   /** An argument as a test would write it. */
@@ -248,6 +286,12 @@ export class Recorder {
     const entries = Object.entries(value).filter(([, item]) => item !== undefined);
     return `{ ${entries.map(([key, item]) => `${IDENTIFIER.test(key) ? key : JSON.stringify(key)}: ${this.spell(item, depth + 1)}`).join(', ')} }`;
   }
+}
+
+/** A member under a symbol, such as an iterator: called on the real object, whose private fields a wrapper does not have. */
+function own(real: object, key: symbol): unknown {
+  const value: unknown = Reflect.get(real, key, real);
+  return typeof value === 'function' ? (value.bind(real) as unknown) : value;
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {

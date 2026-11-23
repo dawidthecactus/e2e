@@ -59,7 +59,7 @@ describe('run_code recorder', () => {
       "read: await screen.getByRole('row').nth(2).textContent();",
       "await screen.getByRole('textbox', 'it\\'s \\\\ a\\nname').fill(/^a.b$/i);",
     ]);
-    expect(await recorder.end(false)).toEqual({ unawaited: 0, lost: undefined });
+    expect(await recorder.end(new AbortController().signal)).toEqual({ unawaited: 0, lost: undefined });
   });
 
   it('hands the real object what the code holds wrapped, and leaves the rest as it is', async () => {
@@ -110,24 +110,24 @@ describe('run_code recorder', () => {
     const caught = recording();
     const one = caught.wrap(fakeScreen(), 'screen');
     await expect(one.getByRole('button').missing()).rejects.toMatchObject({ code: 'LOCATOR_NOT_FOUND' });
-    expect(await caught.end(false)).toEqual({ unawaited: 0, lost: undefined });
+    expect(await caught.end(new AbortController().signal)).toEqual({ unawaited: 0, lost: undefined });
     expect(sources(caught.outcomes)).toEqual(["failed: await screen.getByRole('button').missing();"]);
 
     const early = recording();
     void early.wrap(fakeScreen(), 'screen').getByRole('button').missing();
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(await early.end(false)).toMatchObject({ unawaited: 0, lost: { code: 'LOCATOR_NOT_FOUND' } });
+    expect(await early.end(new AbortController().signal)).toMatchObject({ unawaited: 0, lost: { code: 'LOCATOR_NOT_FOUND' } });
 
     const late = recording();
     void late.wrap(fakeScreen(), 'screen').getByRole('button').missing();
-    expect(await late.end(false)).toMatchObject({ unawaited: 1, lost: { code: 'LOCATOR_NOT_FOUND' } });
+    expect(await late.end(new AbortController().signal)).toMatchObject({ unawaited: 1, lost: { code: 'LOCATOR_NOT_FOUND' } });
   });
 
   it('parks code that was cut off at its next await, with nothing to catch and spin on', async () => {
     const recorder = recording();
     const screen = recorder.wrap(fakeScreen(), 'screen');
     const button = screen.getByRole('button');
-    await recorder.end(true);
+    await recorder.end(AbortSignal.abort());
     let tries = 0;
     let settled = false;
     // A loop that swallows each failure and tries again: an error here would spin without ever yielding.
@@ -154,9 +154,67 @@ describe('run_code recorder', () => {
     // A route handler registered in one call and fired during the next closes over this screen.
     const handler = async (): Promise<string> => screen.getByRole('status').textContent();
     await screen.getByRole('button').tap();
-    await recorder.end(false);
+    await recorder.end(new AbortController().signal);
     expect(await handler()).toBe('text of status');
     expect(sources(recorder.outcomes)).toEqual(["await screen.getByRole('button').tap();"]);
+  });
+
+  it('leaves the loser of a race to the code that raced it, and a poll without a note for its own read', async () => {
+    const recorder = recording();
+    let fail = (_cause: Error): void => undefined;
+    const screen = recorder.wrap(
+      {
+        fast: () => Promise.resolve(),
+        slow: () => new Promise<void>((_, reject) => void (fail = reject)),
+        poll: (read: () => Promise<string>) => read().then(() => undefined),
+        text: () => Promise.resolve('text'),
+      },
+      'screen',
+    );
+    await Promise.race([screen.fast(), screen.slow()]);
+    const ending = recorder.end(new AbortController().signal);
+    fail(Object.assign(new Error('locator matched no nodes'), { code: 'LOCATOR_NOT_FOUND' }));
+    expect(await ending).toEqual({ unawaited: 0, lost: undefined });
+
+    const polled = recording();
+    const page = polled.wrap({ poll: (read: () => Promise<string>) => read().then(() => undefined), text: () => Promise.resolve('text') }, 'screen');
+    await page.poll(() => page.text());
+    expect(sources(polled.outcomes)).toEqual(['read: await screen.text();', 'await screen.poll(() => page.text());']);
+  });
+
+  it('stops waiting on a line the code left when the call is cancelled', async () => {
+    const recorder = recording();
+    void recorder.wrap({ hang: () => new Promise<void>(() => undefined) }, 'browser').hang();
+    const stop = new AbortController();
+    const started = Date.now();
+    setTimeout(() => stop.abort(), 20);
+    expect(await recorder.end(stop.signal)).toEqual({ unawaited: 1, lost: undefined });
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it('calls a member under a symbol on the real object, and keeps a function of the code one handler with its own text', async () => {
+    class Feed {
+      readonly #items = ['a', 'b'];
+      readonly handlers: unknown[] = [];
+      [Symbol.iterator](): Iterator<string> {
+        return this.#items.values();
+      }
+      on(handler: unknown): void {
+        this.handlers.push(handler);
+      }
+    }
+    const feed = new Feed();
+    const recorder = recording();
+    const wrapped = recorder.wrap(feed, 'feed');
+    expect([...wrapped]).toEqual(['a', 'b']);
+    const handler = (value: number): number => value + 1;
+    wrapped.on(handler);
+    wrapped.on(handler);
+    expect(feed.handlers[0]).toBe(feed.handlers[1]);
+    const held = feed.handlers[0] as (value: number) => number;
+    expect([held(1), String(held), held.length]).toEqual([2, '(value) => value + 1', 1]);
+    expect(recorder.textOf(wrapped)).toBe('feed');
+    expect(recorder.textOf(feed)).toBeUndefined();
   });
 
   it('writes lines in the order the code made them, and says which ran alongside another', async () => {
