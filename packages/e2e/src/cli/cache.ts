@@ -343,7 +343,8 @@ async function clear(contents: CacheContents): Promise<number> {
       ? `no replay cache entries to clear in ${contents.directory}\n`
       : `cleared ${removed} file(s) from ${contents.directory}\n`,
   );
-  warnAboutSkipped(contents);
+  // Unreadable recordings and old entries were just deleted; only what was left alone is worth a word.
+  warnAboutForeign(contents);
   return 0;
 }
 
@@ -375,6 +376,10 @@ function warnAboutSkipped(contents: CacheContents): void {
       `${contents.legacy.length} file(s) in ${contents.directory} are entries an older e2e wrote, one .json file per key, which no run reads; re-record those steps, then delete the files (e2e cache clear removes them)\n`,
     );
   }
+  warnAboutForeign(contents);
+}
+
+function warnAboutForeign(contents: CacheContents): void {
   if (contents.foreign.length > 0) {
     process.stderr.write(
       `${contents.foreign.length} file(s) in ${contents.directory} are not cache files and were left alone: ${sanitizeText(contents.foreign.join(', '))}\n`,

@@ -232,6 +232,8 @@ describe('e2e cache clear', () => {
     for (const name of readdirSync(directory)) utimesSync(path.join(directory, name), old, old);
     await invoke('cache', 'clear');
     expect(written(stdoutSpy)).toMatch(/cleared \d+ file\(s\)/u);
+    // What it just deleted is not reported as still there.
+    expect(written(stderrSpy)).toBe('');
     expect(readdirSync(root).toSorted()).toEqual(['e2e.config.ts', 'package.json']);
   });
 
