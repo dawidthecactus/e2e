@@ -1,6 +1,6 @@
 /** `e2e cache ls`, `clear`, and `stats` over a real store directory. */
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
@@ -134,6 +134,22 @@ describe('e2e cache ls', () => {
     expect(lines).toHaveLength(3);
     expect(lines.find((line) => line.startsWith('a-passes'))).toBe(`a-passes.yml  web     ${ascii}${' '.repeat(asciiPadding)}<1m  1`);
     expect(lines.find((line) => line.startsWith('b-passes'))).toBe(`b-passes.yml  web     ${instruction}${' '.repeat(padding)}<1m  1`);
+  });
+
+  it('prints no terminal control sequence a recorded instruction holds', async () => {
+    await seed([{ keyHash: 'b'.repeat(64), trace: trace(step('tests/a.e2e.ts::red', 'web', 'press \u001b[31mred\u001b[0m'), 1) }]);
+    await invoke('cache', 'ls');
+    expect(written(stdoutSpy)).toContain('press red');
+    expect(written(stdoutSpy)).not.toContain('\u001b');
+  });
+
+  it('names the file of an edited recording', async () => {
+    await seed([{ keyHash: 'a'.repeat(64), trace: trace(step('tests/a.e2e.ts::edited', 'web', 'open the cart'), 1) }]);
+    const file = path.join(root, CACHE_DIR, 'a-edited.yml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('act: open the cart', 'act: empty the cart'), 'utf8');
+    await invoke('cache', 'ls');
+    expect(written(stderrSpy)).toContain('a-edited.yml: the recording of key aaaaaaaaaaaa on web is not in the YAML as it was written');
+    expect(written(stderrSpy)).toContain('a-edited.yml: steps[0] on web has no entry in the lock file');
   });
 
   it('reports an empty store instead of failing', async () => {

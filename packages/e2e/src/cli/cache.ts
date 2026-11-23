@@ -19,7 +19,7 @@ import picocolors from 'picocolors';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION } from '@e2e-dev/core/lib/cache/store';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig } from '../config/resolve-run.ts';
-import { errorMessage } from '@e2e-dev/core/lib/internal/errors';
+import { errorMessage, sanitizeText } from '@e2e-dev/core/lib/internal/errors';
 import { redactError } from '@e2e-dev/core/lib/run/secrecy';
 import { visibleWidth } from '../report/format.ts';
 import { formatBytes } from './format-bytes.ts';
@@ -222,7 +222,7 @@ async function readContents(directory: string): Promise<CacheContents> {
     for (const where of parsed.unclaimed) unreadable.push({ file, reason: `${file}: ${where} has no entry in the lock file, so it never replays` });
     for (const recording of parsed.recordings) {
       if (recording.status === 'invalid') {
-        unreadable.push({ file, reason: recording.reason });
+        unreadable.push({ file, reason: `${file}: ${recording.reason}` });
         continue;
       }
       const trace = recording.entry.payload;
@@ -237,7 +237,7 @@ async function readContents(directory: string): Promise<CacheContents> {
         step:
           instruction === undefined
             ? (trace.recordedFor?.instructionDigest.slice(0, DIGEST_PREFIX_CHARS) ?? '-')
-            : oneLine(instruction),
+            : oneLine(sanitizeText(instruction)),
       });
     }
   }
@@ -263,7 +263,7 @@ function list(contents: CacheContents): number {
   const now = Date.now();
   const rows = contents.entries.map((entry) => [
     entry.file,
-    entry.targetId ?? '-',
+    sanitizeText(entry.targetId ?? '-'),
     entry.step,
     formatAge(entry.createdAt, now),
     `${entry.actions}${entry.truncated ? ' (truncated)' : ''}`,
@@ -352,7 +352,7 @@ async function removeTemporaries(directory: string): Promise<number> {
 function warnAboutSkipped(contents: CacheContents): void {
   if (contents.unreadable.length > 0) {
     process.stderr.write(
-      `${contents.unreadable.length} recording(s) in ${contents.directory} are not readable; a run treats each as a miss:\n${contents.unreadable.map((item) => `  ${item.reason}`).join('\n')}\n`,
+      `${contents.unreadable.length} recording(s) in ${contents.directory} are not readable; a run treats each as a miss:\n${contents.unreadable.map((item) => `  ${sanitizeText(item.reason)}`).join('\n')}\n`,
     );
   }
   if (contents.legacy.length > 0) {
@@ -362,7 +362,7 @@ function warnAboutSkipped(contents: CacheContents): void {
   }
   if (contents.foreign.length > 0) {
     process.stderr.write(
-      `${contents.foreign.length} file(s) in ${contents.directory} are not cache files and were left alone: ${contents.foreign.join(', ')}\n`,
+      `${contents.foreign.length} file(s) in ${contents.directory} are not cache files and were left alone: ${sanitizeText(contents.foreign.join(', '))}\n`,
     );
   }
 }
