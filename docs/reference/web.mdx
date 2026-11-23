@@ -677,7 +677,7 @@ const title = await browser.evaluate<string>('document.title');
 #### `consoleMessages`
 
 Returns the console messages the active tab logged since it opened, oldest
-first, up to 200 recent ones.
+first. Up to 200 of the latest messages are kept.
 
 ```ts
 await app.open('/');
@@ -687,21 +687,20 @@ expect(errors).toEqual([]);
 
 ```ts
 export interface WebConsoleMessage {
-  /** The message type Playwright reports: `'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, and the rest. */
+  /** The message type, as Playwright reports it (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, etc.). */
   readonly type: ReturnType<ConsoleMessage['type']>;
   /** The message text. */
   readonly text: string;
 }
 ```
 
-- The list holds what the tab's frames and workers logged too.
-- A navigation does not clear the list: it keeps what earlier documents in
-  the tab logged.
-- `app.restart()` opens a new page, so the list drops what the old page
-  logged. It holds only what the new page logs. Another tab has its own
-  list: activate it to read it.
-- A message the page logs can arrive after the call returns. Use
-  [`expect.poll`](/reference/expect#polling-a-value) to wait for one.
+- Messages from the tab's frames and workers are included.
+- The list isn't cleared on navigation, so it keeps what earlier documents
+  in the tab logged.
+- After `app.restart()`, the list only has what the new page logged.
+- Each tab has a separate list. To read another tab's list, activate it.
+- A message can arrive shortly after the page logs it. To wait for one, use
+  [`expect.poll`](/reference/expect#polling-a-value).
 
 | Throws | When |
 | --- | --- |
@@ -711,9 +710,8 @@ export interface WebConsoleMessage {
 
 #### `pageErrors`
 
-Returns the errors the active tab threw and nothing caught, and the promise
-rejections nothing handled, since it opened, oldest first, up to 200 recent
-ones.
+Returns the uncaught errors and unhandled promise rejections of the active
+tab since it opened, oldest first. Up to 200 of the latest errors are kept.
 
 ```ts
 await app.open('/');
@@ -724,16 +722,15 @@ expect((await browser.pageErrors()).map((error) => error.message)).toEqual([]);
 export interface WebPageError {
   /** The error message. */
   readonly message: string;
-  /** The stack the browser reported; empty when it reported none, as for a thrown value that is not an `Error`. */
+  /** The stack trace from the browser. It's empty when the browser doesn't report one, such as for a thrown value that isn't an `Error`. */
   readonly stack: string;
 }
 ```
 
-- A thrown or rejected value that is not an `Error` gives its text as the
-  `message`, such as `'7'` for `throw 7`, and an empty `stack`.
-- The list follows the rules of [`consoleMessages`](#consolemessages):
-  it holds the tab's frames and workers, a navigation keeps it,
-  `app.restart()` drops what the old page threw, and each tab has its own.
+- A thrown or rejected value that isn't an `Error` is turned into text for
+  `message` (`'7'` for `throw 7`), and `stack` is empty.
+- Frames, workers, navigation, `app.restart()`, and other tabs are handled
+  the same way as in [`consoleMessages`](#consolemessages).
 
 | Throws | When |
 | --- | --- |
@@ -1411,9 +1408,9 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
-  /** Returns the console messages the active tab logged since it opened, up to 200 recent ones. */
+  /** Returns the console messages the active tab logged since it opened, keeping up to 200 of the latest. */
   consoleMessages(): Promise<WebConsoleMessage[]>;
-  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, up to 200 recent ones. */
+  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, keeping up to 200 of the latest. */
   pageErrors(): Promise<WebPageError[]>;
   /** Adds a script every document runs before the page's own, from the next navigation on. */
   addInitScript(script: string | { path: string } | (() => unknown)): Promise<void>;

@@ -1,8 +1,9 @@
 /**
- * `browser.consoleMessages` and `browser.pageErrors` in a real browser: what
- * the active tab logged and threw since it opened, navigations included, and
- * nothing from the page `app.restart()` replaced or from before a persistent
- * browser's first tab joined the attempt.
+ * Tests `browser.consoleMessages` and `browser.pageErrors` in a real browser.
+ *
+ * The lists cover what the active tab logged and threw since it opened,
+ * across navigations. They don't include the page `app.restart()` replaced,
+ * or what a persistent browser's first tab logged before the attempt.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';

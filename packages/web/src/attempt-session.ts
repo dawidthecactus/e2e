@@ -310,8 +310,8 @@ export class AttemptSession {
    * of a second tab beside it, which a hosted browser's live view and
    * recording would show behind the test's. The tab is navigated to
    * `about:blank` first, so its document runs the context's init scripts
-   * as a new tab's does, and its console messages and page errors are
-   * cleared, since Chrome replays the tab's earlier ones to a new CDP
+   * as a new tab's does. Its console messages and page errors are cleared
+   * after that, because Chrome replays a tab's earlier ones to every new CDP
    * client. Every later page is a new tab.
    */
   private async nextPage(context: BrowserContext): Promise<Page> {

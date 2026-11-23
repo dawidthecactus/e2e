@@ -2,4 +2,4 @@
 "@e2e-dev/web": patch
 ---
 
-Add `browser.consoleMessages()` and `browser.pageErrors()`. They return what the active tab logged to the console (`{ type, text }`) and the errors it threw or the promise rejections it left unhandled (`{ message, stack }`) since it opened, up to 200 recent ones of each. A navigation keeps the lists, and `app.restart()` drops what the old page logged and threw. A test no longer needs an init script that wraps `console.error` and listens for `error` and `unhandledrejection` to check for them.
+Add `browser.consoleMessages()` and `browser.pageErrors()`, which return the active tab's console messages (`{ type, text }`) and its uncaught errors and unhandled promise rejections (`{ message, stack }`) since the tab opened. Up to 200 of the latest of each are kept. They aren't cleared on navigation. After `app.restart()`, they only have the new page's. To check for console errors, you no longer need an init script that wraps `console.error` and listens for `error` and `unhandledrejection`.
