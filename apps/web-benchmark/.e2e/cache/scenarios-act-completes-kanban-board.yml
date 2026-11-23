@@ -1,0 +1,23 @@
+# Replay recording of one e2e test. Review it like code: each step lists what
+# a replay does (do) and what it checks before the step passes (expect).
+# Generated, not reviewed: scenarios-act-completes-kanban-board.lock.json holds the cache keys.
+
+test: act completes kanban-board
+file: tests-agent/scenarios.e2e.ts
+
+steps:
+  - act: "Complete this scenario as the page instructs: move the cards so the board matches the goal layout the page describes, then submit the board"
+    targets:
+      web:
+        at: /e/kanban-board
+        do:
+          - drag: { text: Fix payment bug, testId: card-fix-payment-bug }
+            to: { testId: column-done }
+          - drag: { text: Refactor onboarding, testId: card-refactor-onboarding }
+            to: { testId: column-in-progress }
+          - tap: { role: button, name: Submit board, testId: submit-board }
+        expect:
+          shows:
+            - { text: Board matches the goal, testId: success-message }
+          gone:
+            - { text: Empty }

@@ -1,0 +1,21 @@
+# Replay recording of one e2e test. Review it like code: each step lists what
+# a replay does (do) and what it checks before the step passes (expect).
+# Generated, not reviewed: scenarios-act-completes-async-states.lock.json holds the cache keys.
+
+test: act completes async-states
+file: tests-agent/scenarios.e2e.ts
+
+steps:
+  - act: "Complete this scenario as the page instructs: wait for the page to finish loading, read the verification code it shows, enter it, and submit once the button enables"
+    targets:
+      web:
+        at: /e/async-states
+        do:
+          - tap: { role: button, name: Send code, testId: send-code-button }
+          - runtimeValue: minted-token
+          - tap: { role: button, name: Verify, testId: verify-button }
+        expect:
+          shows:
+            - { text: Code verified successfully, testId: success-message }
+          gone:
+            - { testId: initial-loading }

@@ -1,0 +1,25 @@
+# Replay recording of one e2e test. Review it like code: each step lists what
+# a replay does (do) and what it checks before the step passes (expect).
+# Generated, not reviewed: scenarios-act-completes-overlay-trap.lock.json holds the cache keys.
+
+test: act completes overlay-trap
+file: tests-agent/scenarios.e2e.ts
+
+steps:
+  - act: "Complete this scenario as the page instructs: dismiss the cookie banner and the overlay in the way, then press Continue"
+    targets:
+      web:
+        at: /e/overlay-trap
+        do:
+          - tap: { role: button, name: Accept cookies, testId: accept-cookies-button }
+          - tap: { role: button, name: × close overlay }
+          - tap: { role: button, name: Continue, testId: continue-button }
+        expect:
+          shows:
+            - { text: You made it past the overlay, testId: success-message }
+          gone:
+            - { text: "Accept cookies, close whatever is blocking clicks, then press Continue." }
+            - { text: "Blocked clicks: 0", testId: blocked-count }
+            - { role: button, name: Continue, testId: continue-button }
+            - { text: We use cookies to run this benchmark. }
+            - { role: button, name: Accept cookies, testId: accept-cookies-button }
