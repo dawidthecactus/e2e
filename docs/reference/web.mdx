@@ -706,6 +706,8 @@ export interface WebConsoleMessage {
 | Throws | When |
 | --- | --- |
 | `APP_NOT_OPEN` | No page is open yet. |
+| `ACTION_FAILED` | The call ran past [`actionTimeout`](/reference/config#actiontimeout). |
+| `ENGINE_FAILURE` | The browser connection was lost. |
 
 #### `pageErrors`
 
@@ -736,6 +738,8 @@ export interface WebPageError {
 | Throws | When |
 | --- | --- |
 | `APP_NOT_OPEN` | No page is open yet. |
+| `ACTION_FAILED` | The call ran past [`actionTimeout`](/reference/config#actiontimeout). |
+| `ENGINE_FAILURE` | The browser connection was lost. |
 
 #### `route`
 
