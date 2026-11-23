@@ -26,6 +26,7 @@ import {
   MAX_TRACE_DESCRIPTOR_CHARS,
   MAX_TRACE_END_WAIT_MS,
   MAX_TRACE_INPUT_CHARS,
+  MAX_TRACE_PARAMS_CHARS,
   MAX_TRACE_SUMMARY_CHARS,
   isNodeAction,
   type ActionTrace,
@@ -39,7 +40,8 @@ import {
   type TraceTargetDescriptor,
 } from './trace.ts';
 import { readRecordedModel } from './trace-fields.ts';
-import { sha256Hex } from '../internal/ids.ts';
+import { canonicalJson, sha256Hex } from '../internal/ids.ts';
+import type { JsonValue } from '../types.ts';
 import { bound, boundIsAmbiguous } from '../internal/text.ts';
 
 /** The summary a run-time value gap records; the prose a project-tool gap would carry for a tool of that name. */
@@ -379,5 +381,27 @@ export function recordedProvenance(provenance: TraceProvenance, redact: (text: s
     ...(provenance.callIndex === undefined ? {} : { callIndex: provenance.callIndex }),
     ...(agent === undefined ? {} : { agent: bound(agent, MAX_TRACE_DESCRIPTOR_CHARS) }),
     ...(ambiguous ? { identityDigest: sha256Hex(JSON.stringify([testId, targetId, agent ?? null])) } : {}),
+    ...(provenance.instruction === undefined ? {} : { instruction: bound(redact(provenance.instruction), MAX_TRACE_INPUT_CHARS) }),
+    ...recordedParams(provenance.params, redact),
   };
+}
+
+/**
+ * Params as an entry stores them: every string redacted, and none at all
+ * when there are none or their canonical JSON is longer than an entry keeps.
+ * Display only, like the instruction, so a cut would only mislead.
+ */
+function recordedParams(
+  params: Readonly<Record<string, JsonValue>> | undefined,
+  redact: (text: string) => string,
+): { readonly params?: Readonly<Record<string, JsonValue>> } {
+  if (params === undefined || Object.keys(params).length === 0) return {};
+  const walk = (value: JsonValue): JsonValue => {
+    if (typeof value === 'string') return redact(value);
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(walk);
+    return Object.fromEntries(Object.entries(value as Readonly<Record<string, JsonValue>>).map(([key, item]) => [redact(key), walk(item)]));
+  };
+  const redacted = walk(params) as Readonly<Record<string, JsonValue>>;
+  return canonicalJson(redacted).length <= MAX_TRACE_PARAMS_CHARS ? { params: redacted } : {};
 }

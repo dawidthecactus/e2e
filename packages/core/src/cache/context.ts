@@ -316,6 +316,8 @@ export function createAgentCacheContext(options: {
           paramsDigest: signature.paramsDigest,
           callIndex,
           agent: agent.name,
+          instruction,
+          ...(params === undefined ? {} : { params }),
         },
       };
     },

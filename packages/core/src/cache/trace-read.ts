@@ -8,7 +8,8 @@
  */
 
 import { isKeyModifier, KEY_MODIFIERS, type KeyModifier } from '../engine/contract.ts';
-import type { ScrollDirection } from '../types.ts';
+import type { JsonValue, ScrollDirection } from '../types.ts';
+import { canonicalJson } from '../internal/ids.ts';
 import { VIEWPORT_LIMITS } from '../internal/geometry.ts';
 import { readBoundedText, readRecordedModel } from './trace-fields.ts';
 import {
@@ -22,6 +23,7 @@ import {
   MAX_TRACE_DESCRIPTOR_CHARS,
   MAX_TRACE_END_WAIT_MS,
   MAX_TRACE_INPUT_CHARS,
+  MAX_TRACE_PARAMS_CHARS,
   MAX_TRACE_SUMMARY_CHARS,
   MAX_TRACE_UPLOAD_PATHS,
   oneOf,
@@ -433,6 +435,10 @@ function readProvenance(document: unknown): TraceProvenance | undefined {
   if (raw['agent'] !== undefined && agent === undefined) return undefined;
   const identityDigest = raw['identityDigest'];
   if (!isOptionalDigest(identityDigest)) return undefined;
+  const instruction = raw['instruction'] === undefined ? undefined : readBoundedText(raw['instruction'], MAX_TRACE_INPUT_CHARS);
+  if (raw['instruction'] !== undefined && instruction === undefined) return undefined;
+  const params = raw['params'] === undefined ? undefined : readParams(raw['params']);
+  if (raw['params'] !== undefined && params === undefined) return undefined;
   return {
     testId,
     targetId,
@@ -441,7 +447,31 @@ function readProvenance(document: unknown): TraceProvenance | undefined {
     ...(callIndex === undefined ? {} : { callIndex }),
     ...(agent === undefined ? {} : { agent }),
     ...(identityDigest === undefined ? {} : { identityDigest }),
+    ...(instruction === undefined ? {} : { instruction }),
+    ...(params === undefined ? {} : { params }),
   };
+}
+
+/** Deepest a recorded params value nests; projected params are a test's own small literal. */
+const MAX_PARAMS_DEPTH = 16;
+
+/**
+ * Recorded params: a plain JSON object no longer than `MAX_TRACE_PARAMS_CHARS`
+ * as canonical JSON, nested at most `MAX_PARAMS_DEPTH` levels, or undefined.
+ */
+function readParams(document: unknown): Readonly<Record<string, JsonValue>> | undefined {
+  const json = (value: unknown, depth: number): value is JsonValue => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value !== 'object' || depth >= MAX_PARAMS_DEPTH) return false;
+    if (Array.isArray(value)) return value.every((item) => json(item, depth + 1));
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    return Object.values(value).every((item) => json(item, depth + 1));
+  };
+  if (typeof document !== 'object' || document === null || Array.isArray(document) || !json(document, 0)) return undefined;
+  const params = document as Readonly<Record<string, JsonValue>>;
+  return canonicalJson(params).length <= MAX_TRACE_PARAMS_CHARS ? params : undefined;
 }
 
 /** One to `MAX_TRACE_UPLOAD_PATHS` verbatim paths, each a replay input like a typed value. */

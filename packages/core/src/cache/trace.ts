@@ -18,7 +18,7 @@
 
 import type { KeyModifier } from '../engine/contract.ts';
 import { timestamp } from '../internal/ids.ts';
-import type { ScrollDirection } from '../types.ts';
+import type { JsonValue, ScrollDirection } from '../types.ts';
 import { bound } from '../internal/text.ts';
 import type { RecordedModel } from './trace-fields.ts';
 
@@ -112,7 +112,23 @@ export interface TraceProvenance {
    * share the digest only when their names differ in a secret value alone.
    */
   readonly identityDigest?: string;
+  /**
+   * The instruction as the test wrote it, redacted and bounded, so a
+   * reviewer reads the step it records instead of `instructionDigest`.
+   * Never replay input: the digest is what the key holds.
+   */
+  readonly instruction?: string;
+  /**
+   * The step's params as the key digests them (`paramsDigest`): projected,
+   * so a secret is its name, with a placeholder for each `unique()` value,
+   * then redacted. Absent when there were none, or when they are longer than
+   * an entry keeps (`MAX_TRACE_PARAMS_CHARS`).
+   */
+  readonly params?: Readonly<Record<string, JsonValue>>;
 }
+
+/** Longest the canonical JSON of a step's params may be for an entry to keep them. */
+export const MAX_TRACE_PARAMS_CHARS = 4_096;
 
 /**
  * How a recorded action addressed its node, independent of observation ids.
