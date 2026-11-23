@@ -677,7 +677,7 @@ const title = await browser.evaluate<string>('document.title');
 #### `consoleMessages`
 
 Returns the console messages the active tab logged since it opened, oldest
-first, up to the latest 200.
+first, up to 200 recent ones.
 
 ```ts
 await app.open('/');
@@ -685,14 +685,22 @@ const errors = (await browser.consoleMessages()).filter((message) => message.typ
 expect(errors).toEqual([]);
 ```
 
-- Each message has a `type`, the console method as Playwright names it
-  (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, and the rest), and
-  its `text`.
+```ts
+export interface WebConsoleMessage {
+  /** The message type Playwright reports: `'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, and the rest. */
+  readonly type: ReturnType<ConsoleMessage['type']>;
+  /** The message text. */
+  readonly text: string;
+}
+```
+
+- The list holds what the tab's frames and workers logged too.
 - A navigation does not clear the list: it keeps what earlier documents in
   the tab logged.
-- `app.restart()` opens a new page, so the list starts empty again. Another
-  tab has its own list: activate it to read it.
-- A message the page logs during the call can arrive after it returns. Use
+- `app.restart()` opens a new page, so the list drops what the old page
+  logged. It holds only what the new page logs. Another tab has its own
+  list: activate it to read it.
+- A message the page logs can arrive after the call returns. Use
   [`expect.poll`](/reference/expect#polling-a-value) to wait for one.
 
 | Throws | When |
@@ -702,18 +710,28 @@ expect(errors).toEqual([]);
 #### `pageErrors`
 
 Returns the errors the active tab threw and nothing caught, and the promise
-rejections nothing handled, since it opened, oldest first, up to the latest
-200.
+rejections nothing handled, since it opened, oldest first, up to 200 recent
+ones.
 
 ```ts
 await app.open('/');
 expect((await browser.pageErrors()).map((error) => error.message)).toEqual([]);
 ```
 
-- Each error has a `message` and the `stack` the browser reported, empty
-  when it reported none.
+```ts
+export interface WebPageError {
+  /** The error message. */
+  readonly message: string;
+  /** The stack the browser reported; empty when it reported none, as for a thrown value that is not an `Error`. */
+  readonly stack: string;
+}
+```
+
+- A thrown or rejected value that is not an `Error` gives its text as the
+  `message`, such as `'7'` for `throw 7`, and an empty `stack`.
 - The list follows the rules of [`consoleMessages`](#consolemessages):
-  a navigation keeps it, `app.restart()` empties it, and each tab has its own.
+  it holds the tab's frames and workers, a navigation keeps it,
+  `app.restart()` drops what the old page threw, and each tab has its own.
 
 | Throws | When |
 | --- | --- |
@@ -1389,9 +1407,9 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
-  /** Returns the console messages the active tab logged since it opened, up to the latest 200. */
+  /** Returns the console messages the active tab logged since it opened, up to 200 recent ones. */
   consoleMessages(): Promise<WebConsoleMessage[]>;
-  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, up to the latest 200. */
+  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, up to 200 recent ones. */
   pageErrors(): Promise<WebPageError[]>;
   /** Adds a script every document runs before the page's own, from the next navigation on. */
   addInitScript(script: string | { path: string } | (() => unknown)): Promise<void>;

@@ -630,8 +630,9 @@ the opener is gone. `tabs()`, `newTab()`, `tab.activate()`, and
   `EVALUATE_FAILED`.
 - `consoleMessages()`, `pageErrors()`: what the active tab logged
   (`{ type, text }`) and threw or rejected unhandled (`{ message, stack }`)
-  since it opened, the latest 200; a navigation keeps them, `app.restart()`
-  empties them. Wait for a late one with `expect.poll`.
+  since it opened, up to 200 recent ones; a navigation keeps them,
+  `app.restart()` drops the old page's. Wait for a late one with
+  `expect.poll`.
 - `addInitScript(source | { path } | fn)`, `addInitScript(fn, arg)`: runs
   before the page's own scripts; call it before `app.open`. `arg` is JSON.
 - `route(pattern, handler)`, `unroute(pattern)`: intercept requests, newest

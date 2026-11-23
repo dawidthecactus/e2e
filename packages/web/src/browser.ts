@@ -12,7 +12,7 @@
  * says which URLs a test may open.
  */
 
-import type { Download, Route } from 'playwright-core';
+import type { ConsoleMessage, Download, Route } from 'playwright-core';
 import type { ActionOptions, Expectable, JsonValue, Locator, Screen, TextMatch } from '@e2e-dev/core';
 import {
   ConfigurationError,
@@ -135,8 +135,8 @@ export interface WebResponse {
 
 /** A message the page logged to the console, as `browser.consoleMessages` returns it. */
 export interface WebConsoleMessage {
-  /** The console method, as Playwright names it: `'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, and the rest. */
-  readonly type: string;
+  /** The message type Playwright reports: `'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, and the rest. */
+  readonly type: ReturnType<ConsoleMessage['type']>;
   /** The message text. */
   readonly text: string;
 }
@@ -145,7 +145,7 @@ export interface WebConsoleMessage {
 export interface WebPageError {
   /** The error message. */
   readonly message: string;
-  /** The stack the browser reported; empty when it reported none. */
+  /** The stack the browser reported; empty when it reported none, as for a thrown value that is not an `Error`. */
   readonly stack: string;
 }
 
@@ -314,9 +314,9 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
-  /** Returns the console messages the active tab logged since it opened, up to the latest 200. */
+  /** Returns the console messages the active tab logged since it opened, up to 200 recent ones. */
   consoleMessages(): Promise<WebConsoleMessage[]>;
-  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, up to the latest 200. */
+  /** Returns the uncaught errors and unhandled rejections of the active tab since it opened, up to 200 recent ones. */
   pageErrors(): Promise<WebPageError[]>;
   /**
    * Adds a script every document runs before the page's own, from the next

@@ -1,7 +1,8 @@
 /**
  * `browser.consoleMessages` and `browser.pageErrors` in a real browser: what
  * the active tab logged and threw since it opened, navigations included, and
- * nothing from the page `app.restart()` replaced.
+ * nothing from the page `app.restart()` replaced or from before a persistent
+ * browser's first tab joined the attempt.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -9,9 +10,11 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { chromium } from 'playwright-core';
 import type { EngineCleanupContext, EngineFixtureContext, EngineHandle, OperationContext } from '@e2e-dev/core/engine';
-import { web, type Browser } from '../../src/index.ts';
+import { web, type Browser, type WebOptions } from '../../src/index.ts';
+import { closeRemoteChrome, launchRemoteChrome, type RemoteChrome } from '../helpers/cdp-host.ts';
 import { ignoreTrace, noSecrets } from '../helpers/secrets.ts';
 
 const PAGES: Readonly<Record<string, string>> = {
@@ -19,6 +22,10 @@ const PAGES: Readonly<Record<string, string>> = {
   '/errors': `<script>
     Promise.reject(new Error('rejected'));
     setTimeout(() => { throw new Error('thrown'); });
+  </script>`,
+  '/values': `<script>
+    Promise.reject('plain');
+    setTimeout(() => { throw 7; });
   </script>`,
   '/quiet': '<p>quiet</p>',
 };
@@ -47,6 +54,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
   let artifactsDir: string;
   let engine: EngineHandle;
   let browser: Browser;
+  let remote: RemoteChrome | undefined;
 
   beforeAll(async () => {
     ({ server, origin } = await startServer());
@@ -58,8 +66,9 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     rmSync(artifactsDir, { recursive: true, force: true });
   });
 
-  beforeEach(async () => {
-    engine = web();
+  /** Starts an attempt of an engine with `options` and its `browser` fixture. */
+  async function start(options: WebOptions = {}): Promise<void> {
+    engine = web(options);
     await engine.init!({
       runId: 'run-console', targetName: 'web', projectRoot: process.cwd(),
       app: { site: '127.0.0.1' }, env: {}, headed: false,
@@ -73,14 +82,17 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
       expectable: (target: object) => target,
       fixture: (_name: string, target: object) => target,
     } as unknown as EngineFixtureContext) as Browser;
-  });
+  }
 
   afterEach(async () => {
     await engine.endAttempt!(cleanup());
     await engine.dispose!(cleanup());
+    if (remote !== undefined) await closeRemoteChrome(remote);
+    remote = undefined;
   });
 
   it('returns the console messages the page logged, errors included', async () => {
+    await start();
     await browser.goto('/console');
 
     await expect.poll(() => browser.consoleMessages()).toEqual([
@@ -91,6 +103,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
   });
 
   it('returns thrown errors and unhandled rejections with their message and stack', async () => {
+    await start();
     await browser.goto('/errors');
 
     await expect.poll(async () => (await browser.pageErrors()).map((error) => error.message).toSorted()).toEqual(['rejected', 'thrown']);
@@ -99,7 +112,18 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     }
   });
 
+  it('returns a thrown or rejected value that is not an Error as its text, with an empty stack', async () => {
+    await start();
+    await browser.goto('/values');
+
+    await expect.poll(async () => (await browser.pageErrors()).toSorted((a, b) => a.message.localeCompare(b.message))).toEqual([
+      { message: '7', stack: '' },
+      { message: 'plain', stack: '' },
+    ]);
+  });
+
   it('keeps what earlier documents of the page logged and threw', async () => {
+    await start();
     await browser.goto('/console');
     await browser.goto('/errors');
     await expect.poll(async () => (await browser.pageErrors()).length).toBe(2);
@@ -111,6 +135,7 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
   });
 
   it('starts empty on the page a restart opens', async () => {
+    await start();
     await browser.goto('/console');
     await browser.goto('/errors');
     await expect.poll(async () => (await browser.pageErrors()).length).toBe(2);
@@ -121,7 +146,25 @@ describe('browser.consoleMessages and browser.pageErrors', () => {
     expect(await browser.pageErrors()).toEqual([]);
   });
 
+  it('leaves out what a persistent browser\'s first tab logged and threw before the attempt', async () => {
+    remote = await launchRemoteChrome();
+    const host = await chromium.connectOverCDP(remote.endpoint);
+    const tab = host.contexts()[0]!.pages()[0]!;
+    await tab.goto(`${origin}/console`);
+    await tab.goto(`${origin}/errors`);
+    await expect.poll(async () => (await tab.pageErrors({ filter: 'all' })).length).toBe(2);
+    await host.close();
+
+    const endpoint = remote.endpoint;
+    await start({ connect: { cdpEndpoint: () => endpoint, reconnectEndpoint: () => endpoint } });
+    await browser.goto('/quiet');
+
+    expect(await browser.consoleMessages()).toEqual([]);
+    expect(await browser.pageErrors()).toEqual([]);
+  });
+
   it('rejects with INVALID_STATE before a page opens', async () => {
+    await start();
     await expect(browser.consoleMessages()).rejects.toMatchObject({ code: 'INVALID_STATE' });
     await expect(browser.pageErrors()).rejects.toMatchObject({ code: 'INVALID_STATE' });
   });
