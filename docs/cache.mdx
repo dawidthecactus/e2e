@@ -337,6 +337,11 @@ steps:
   replaces the old one.
 - Steps are listed in the order the test runs them. A step recorded for
   the first time goes where it runs, between the steps before and after it.
+- A step whose instruction or params change is a new step. The old step's
+  recording stays in the file until you delete it from both files, or run
+  `npx e2e cache clear`.
+- A run rewrites the whole file when it records, so comments you add to it
+  are lost.
 - Recordings hold no prompts, conversations, screenshots, observed trees,
   or secret values. A secret fill stores only the secret's name.
 
@@ -380,6 +385,11 @@ each checkout's path becomes its identity and nothing replays across them.
 - Checkouts share entries: a failing run in any of them evicts the entry, and
   checkouts with the same app identity but different app code overwrite each
   other's entries (the last write wins).
+- A step keeps one recording per target, even across app identities. Runs
+  of one target against two environments (another `app.url` origin or
+  `app.environment`) replace each other's recordings, and under
+  `cache.strict` the other environment's recording fails the step with
+  `REPLAY_STALE`. Give each environment its own target name.
 - While the override is set, a cache committed under `cache.dir` isn't read.
 - Use one directory per project. Two projects in one directory can fail with
   a false `REPLAY_STALE` under `cache.strict`.
