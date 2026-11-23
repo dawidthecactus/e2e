@@ -25,7 +25,7 @@ import { access, mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/pr
 import { join } from 'node:path';
 import { writeFilesAtomic } from '../internal/atomic-write.ts';
 import { errorMessage } from '../internal/errors.ts';
-import { timestamp } from '../internal/ids.ts';
+import { canonicalJson, timestamp } from '../internal/ids.ts';
 import { bound } from '../internal/text.ts';
 import { withFileLock } from './file-lock.ts';
 import {
@@ -444,10 +444,14 @@ export class FileCacheStore implements CacheStore {
    * lock. Undefined when either is over the size cap.
    */
   private async save(name: string, testId: string, recordings: readonly StoredRecording[]): Promise<{ bytes: number } | undefined> {
-    const { yaml, lock } = await renderRecordingFile({ testId, recordings: onePerSlot(recordings) }, `${name}${LOCK_EXTENSION}`);
+    const kept = onePerSlot(recordings);
+    const { yaml, lock } = await renderRecordingFile({ testId, recordings: kept }, `${name}${LOCK_EXTENSION}`);
     const yamlBytes = Buffer.byteLength(yaml, 'utf8');
     const lockBytes = Buffer.byteLength(lock, 'utf8');
     if (yamlBytes > this.maxBytes || lockBytes > this.maxBytes) return undefined;
+    // What reads back is what replays, and the lock's digests are taken from it, so a value the YAML
+    // cannot carry as written would replay changed without a word: such a pair is not written.
+    if (!(await readsBack(yaml, lock, kept))) return undefined;
     await mkdir(this.directory, { recursive: true });
     await writeFilesAtomic(
       [
@@ -560,6 +564,28 @@ function onePerSlot(recordings: readonly StoredRecording[]): StoredRecording[] {
     if (kept === undefined || recording.createdAt > kept.createdAt) newest.set(slot(recording), recording);
   }
   return recordings.filter((recording) => newest.get(slot(recording)) === recording);
+}
+
+/** Whether a rendered pair reads back as every recording it was rendered from, in all a replay uses. */
+async function readsBack(yaml: string, lock: string, recordings: readonly StoredRecording[]): Promise<boolean> {
+  const parsed = await parseRecordingFile(yaml, lock);
+  if (parsed.status !== 'ok' || parsed.unclaimed.length > 0) return false;
+  return recordings.every((recording) => {
+    const read = parsed.recordings.find((candidate) => candidate.keyHash === recording.keyHash);
+    return read?.status === 'hit' && canonicalJson(replayed(read.entry.payload)) === canonicalJson(replayed(recording.trace));
+  });
+}
+
+/** What a replay reads of a trace: its actions (a summary only where a gap's is its content), paths, and end checks. */
+function replayed(trace: ActionTrace): unknown {
+  return {
+    actions: trace.actions.map((action) => (action.name === 'tool' ? action : { ...action, summary: undefined })),
+    startPath: trace.startPath,
+    endPath: trace.endPath,
+    endAnchors: trace.endAnchors,
+    goneAnchors: trace.goneAnchors,
+    truncated: trace.truncated,
+  };
 }
 
 /** A pair's readable recordings, the ones a rewrite keeps. */

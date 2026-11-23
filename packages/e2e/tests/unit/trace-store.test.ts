@@ -215,6 +215,23 @@ describe('FileCacheStore', () => {
     expect((await store.read(KEY, deepStep)).status).toBe('hit');
   });
 
+  it('reads back a value with line breaks as written, in a descriptor and as typed text', async () => {
+    const { store } = await makeStore();
+    const actions = [
+      { name: 'tap', summary: 'tap', target: { role: 'text', name: 'Total:\n$42' } },
+      { name: 'type', summary: 'type', target: { role: 'textbox', name: 'Note' }, value: ' \n' },
+      { name: 'type', summary: 'type', target: { role: 'textbox', name: 'Lines' }, value: 'one\n  two\n' },
+    ] as const;
+    expect(await store.write(KEY, payload('web', { actions: [...actions], endAnchors: [{ role: 'status', text: 'Saved:\nnow' }] }))).toBeDefined();
+    const read = await store.read(KEY, step());
+    expect(read.status === 'hit' && read.entry.payload.actions.map((action) => ('value' in action ? action.value : (action as { target: { name: string } }).target.name))).toEqual([
+      'Total:\n$42',
+      ' \n',
+      'one\n  two\n',
+    ]);
+    expect(read.status === 'hit' && read.entry.payload.endAnchors).toEqual([{ role: 'status', text: 'Saved:\nnow' }]);
+  });
+
   it('writes a target whatever its name', async () => {
     const { store } = await makeStore();
     await store.write(KEY, payload('__proto__'));

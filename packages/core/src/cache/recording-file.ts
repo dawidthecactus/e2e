@@ -208,13 +208,29 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
     ' so an edited recording no longer replays. Record it again instead.',
   ].join('\n');
   spaceSteps(yaml, doc);
-  const text = doc.toString({ lineWidth: 0, indentSeq: true });
+  quoteLineBreaks(yaml, doc);
+  const text = doc.toString({ lineWidth: 0, indentSeq: true, blockQuote: false });
 
   // Each lock entry is held to its recording as the YAML reads back, so the digest is taken from the text itself.
   const written = (yaml.parse(text) as { steps: Record<string, unknown>[] }).steps;
   const entries = placed.map(({ recording, step }) => lockEntry(recording, recordingDigest(written[step]!, recording.trace.recordedFor!.targetId), groups[step]!));
   const lock = { format: RECORDING_LOCK_FORMAT, testId: file.testId, entries };
   return { yaml: text, lock: `${JSON.stringify(lock, null, 2)}\n` };
+}
+
+/**
+ * Every string with a line break as a double-quoted scalar, its breaks
+ * escaped. Plain, a break inside a flow mapping (`{ name: "Total:\n$42" }`)
+ * renders as YAML the library itself refuses to read, and a block scalar
+ * drops a line of only spaces (`" \n"` reads back as `"\n"`): a typed value
+ * must read back as typed.
+ */
+function quoteLineBreaks(yaml: Yaml, doc: Document): void {
+  yaml.visit(doc, {
+    Scalar(_key, scalar) {
+      if (typeof scalar.value === 'string' && /[\n\r]/u.test(scalar.value)) scalar.type = 'QUOTE_DOUBLE';
+    },
+  });
 }
 
 /** A blank line before `steps` and between steps, so each reads as its own block and a diff stays inside it. */
