@@ -119,7 +119,12 @@ With npm, use `npm exec -- e2e run --headed` to pass flags to e2e.
 
 ## The replay cache
 
-Entries live under `.e2e/cache/`, one file per key, named by key digest.
+Each test's recordings live in one YAML file under `.e2e/cache/`, named for
+the test (`<test>.yml`: each step's `act`, then per target what a replay
+does, `do`, and checks, `expect`), beside a generated `<test>.lock.json` with
+the keys. Review the `.yml`; never edit the lock. An edit that no longer
+matches the lock reads as `invalid-entry`. Older `<key>.json` entries are
+not read.
 `E2E_CACHE_DIR` or `--cache-dir <dir>` (on `run` and `cache`) replaces
 `cache.dir` (file store only), so worktrees can share one directory; the mode
 stays as configured.
@@ -129,9 +134,9 @@ its own tools.
 
 | Command | Prints |
 | --- | --- |
-| `e2e cache ls` | One row per entry: test, target, instruction digest, age, action count. |
-| `e2e cache stats` | Directory, entry count, total size. |
-| `e2e cache clear` | Deletes the entries and the directory; files the runner never wrote stay. |
+| `e2e cache ls` | One row per recording: file, target, instruction, age, action count. |
+| `e2e cache stats` | Directory, test and entry counts, total size. |
+| `e2e cache clear` | Deletes the recordings, older `<key>.json` entries, and the directory; files the runner never wrote stay. |
 
 ## Output
 

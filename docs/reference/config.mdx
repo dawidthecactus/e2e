@@ -1383,8 +1383,8 @@ cache: { store: createStore(cacheUrl) },
 - Exempt from the CI demotion: it states its own trust through `writable`.
 - `--cache-dir` beside it is `INVALID_CONFIG`, and `E2E_CACHE_DIR` is ignored.
 
-`CacheStore`, `CacheReadResult`, `TraceEntry`, and `ActionTrace` are exported
-from `e2e`.
+`CacheStore`, `CacheReadResult`, `TraceEntry`, `ActionTrace`, and
+`TraceProvenance` are exported from `e2e`.
 
 #### `dir`
 
@@ -1945,7 +1945,12 @@ export interface CacheConfig {
 /** Where the replay cache keeps its entries: the file store by default, or a host's own through `cache.store`. */
 export interface CacheStore {
   readonly writable: boolean;
-  read(keyHash: string): Promise<CacheReadResult>;
+  /**
+   * Reads one entry. `step` is the step the key was claimed for, as an entry
+   * records it (`recordedFor`): a store may use it to find where the entry
+   * lives, and may ignore it.
+   */
+  read(keyHash: string, step?: TraceProvenance): Promise<CacheReadResult>;
   /** Persists one trace, returning its size, or undefined when not written. */
   write(keyHash: string, payload: ActionTrace): Promise<{ bytes: number } | undefined>;
   /**
@@ -1953,8 +1958,9 @@ export interface CacheStore {
    * flow is implicated in a failed attempt: the entry re-records on the next
    * pass instead of replaying a poisoned flow forever. Optional: a store
    * without eviction merely stays stale until the next confirmed write.
+   * `step` is as in `read`.
    */
-  delete?(keyHash: string): Promise<void>;
+  delete?(keyHash: string, step?: TraceProvenance): Promise<void>;
 }
 
 export type CacheReadResult =
