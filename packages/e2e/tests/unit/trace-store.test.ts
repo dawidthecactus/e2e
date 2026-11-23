@@ -171,6 +171,20 @@ describe('FileCacheStore', () => {
     expect((await store.read(OTHER_KEY, step('web', { callIndex: 1 }))).status).toBe('hit');
   });
 
+  it('tells two alike runs of one act apart, so deleting one leaves the other', async () => {
+    const { directory, store } = await makeStore();
+    const [first, second] = [step(), step('web', { callIndex: 1 })];
+    await store.write(KEY, payload('web', { recordedFor: first }));
+    await store.write(OTHER_KEY, payload('web', { recordedFor: second }));
+    const yaml = await readFile(yamlPath(directory), 'utf8');
+    expect(yaml).toContain('    call: 2\n');
+    // Delete the first run's block: its key no longer replays, the second's still does.
+    const start = yaml.indexOf('  - act:');
+    await writeFile(yamlPath(directory), `${yaml.slice(0, start)}${yaml.slice(yaml.indexOf('\n\n  - act:') + 2)}`, 'utf8');
+    expect((await store.read(KEY, first)).status).toBe('miss');
+    expect((await store.read(OTHER_KEY, second)).status).toBe('hit');
+  });
+
   it('reads back params nested as deep as agent.act accepts', async () => {
     const { store } = await makeStore();
     // 32 levels of objects around a string, the deepest the params validation lets through.
@@ -307,13 +321,14 @@ describe('FileCacheStore', () => {
     const [first, second] = [named('open the settings'), named('save the draft')];
     await store.write(KEY, payload('web', { recordedFor: first }));
     await store.write(OTHER_KEY, payload('web', { recordedFor: second, startPath: '/draft', endPath: '/draft' }));
-    // A hand-resolved merge conflict in the lock, say: the second key's line now names the first step's recording.
+    // A hand-resolved merge conflict in the lock, say: each key's line now names the other step's recording.
     const lock = JSON.parse(await readFile(lockPath(directory), 'utf8'));
-    lock.entries[1].digest = lock.entries[0].digest;
+    [lock.entries[0].digest, lock.entries[1].digest] = [lock.entries[1].digest, lock.entries[0].digest];
     await writeFile(lockPath(directory), JSON.stringify(lock), 'utf8');
-    const read = await store.read(OTHER_KEY, second);
-    expect(read.status === 'invalid' && read.reason).toMatch(/its act is not the instruction its key was recorded for/u);
-    expect((await store.read(KEY, first)).status).toBe('hit');
+    for (const [key, read] of [[KEY, first], [OTHER_KEY, second]] as const) {
+      const result = await store.read(key, read);
+      expect(result.status === 'invalid' && result.reason).toMatch(/its act is not the instruction its key was recorded for/u);
+    }
   });
 
   it('finds each recording wherever its step moves, and reads one deleted from the YAML as absent', async () => {

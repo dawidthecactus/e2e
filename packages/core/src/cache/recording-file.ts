@@ -190,6 +190,8 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
       ...(step.instruction === undefined ? {} : { act: step.instruction }),
       ...(step.params === undefined ? {} : { params: step.params }),
       ...(step.agent === undefined || step.agent === DEFAULT_AGENT ? {} : { agent: step.agent }),
+      // A test that runs one act more than once shows which run each block is, so two alike stay two.
+      ...(step.callIndex === undefined || step.callIndex === 0 ? {} : { call: step.callIndex + 1 }),
       targets,
     };
   });
@@ -243,6 +245,8 @@ function recordingDigest(step: Record<string, unknown>, targetId: string): strin
     act: step['act'] ?? null,
     params: step['params'] ?? null,
     agent: step['agent'] ?? null,
+    // Only a repeated run shows `call`, so only then is it in the digest.
+    ...(step['call'] === undefined ? {} : { call: step['call'] }),
     target: targetId,
     recording: Object.hasOwn(targets, targetId) ? targets[targetId] : null,
   }));
@@ -624,6 +628,8 @@ interface ReadStep {
   readonly act?: string;
   readonly params?: Readonly<Record<string, JsonValue>>;
   readonly agent?: string;
+  /** Which run of its act in the test this step is, from 2; absent on the first. */
+  readonly call?: number;
   /** Each target's recording, as `trace-1` payload fields, and its `recordingDigest`. */
   readonly targets: ReadonlyMap<string, { readonly variant: Record<string, unknown>; readonly digest: string }>;
 }
@@ -636,10 +642,12 @@ function readSteps(document: unknown): { readonly test: string; readonly file?: 
   const steps = list(raw['steps'], 'steps').map((value, index): ReadStep => {
     const where = `steps[${String(index)}]`;
     const step = object(value, where);
-    only(step, ['act', 'params', 'agent', 'targets'], where);
+    only(step, ['act', 'params', 'agent', 'call', 'targets'], where);
     const act = step['act'] === undefined ? undefined : readString(step['act'], `${where}.act`);
     const params = step['params'] === undefined ? undefined : (object(step['params'], `${where}.params`) as Readonly<Record<string, JsonValue>>);
     const agent = step['agent'] === undefined ? undefined : readString(step['agent'], `${where}.agent`);
+    const call = step['call'];
+    if (call !== undefined && (typeof call !== 'number' || !Number.isSafeInteger(call) || call < 2)) fail(`${where}.call must be a whole number from 2`);
     const targetsRaw = object(step['targets'], `${where}.targets`);
     const targets = new Map(
       Object.entries(targetsRaw).map(([targetId, variant]) => [
@@ -648,7 +656,13 @@ function readSteps(document: unknown): { readonly test: string; readonly file?: 
       ]),
     );
     if (targets.size === 0) fail(`${where}.targets names no target`);
-    return { ...(act === undefined ? {} : { act }), ...(params === undefined ? {} : { params }), ...(agent === undefined ? {} : { agent }), targets };
+    return {
+      ...(act === undefined ? {} : { act }),
+      ...(params === undefined ? {} : { params }),
+      ...(agent === undefined ? {} : { agent }),
+      ...(call === undefined ? {} : { call }),
+      targets,
+    };
   });
   return { test, ...(file === undefined ? {} : { file }), steps };
 }
@@ -716,27 +730,36 @@ export async function parseRecordingFile(yamlText: string, lockText: string): Pr
   } catch (cause) {
     return { status: 'invalid', testId: lock.testId, keyHashes, reason: errorText(cause) };
   }
-  const shown = new Map<string, { readonly index: number; readonly targetId: string; readonly step: ReadStep; readonly variant: Record<string, unknown> }>();
+  // Every recording the YAML shows, by digest; each lock entry claims one, so one block never answers two keys.
+  interface Shown {
+    readonly index: number;
+    readonly targetId: string;
+    readonly step: ReadStep;
+    readonly variant: Record<string, unknown>;
+    claimed: boolean;
+  }
+  const shown = new Map<string, Shown[]>();
   read.steps.forEach((step, index) => {
     for (const [targetId, { variant, digest }] of step.targets) {
-      if (!shown.has(digest)) shown.set(digest, { index, targetId, step, variant });
+      shown.set(digest, [...(shown.get(digest) ?? []), { index, targetId, step, variant, claimed: false }]);
     }
   });
-  const claimed = new Set<string>();
   const found: { readonly order: number; readonly recording: ReadRecording }[] = [];
   const unmatched: LockEntry[] = [];
   for (const entry of lock.entries) {
-    const match = shown.get(entry.digest);
-    if (match === undefined || match.targetId !== entry.target) {
+    const match = shown.get(entry.digest)?.find((candidate) => !candidate.claimed && candidate.targetId === entry.target);
+    if (match === undefined) {
       unmatched.push(entry);
       continue;
     }
-    claimed.add(entry.digest);
+    match.claimed = true;
     found.push({ order: match.index, recording: readRecording(lock.testId, entry, match.index, match.step, match.variant) });
   }
-  const unclaimed = read.steps.flatMap((step, index) =>
-    [...step.targets].flatMap(([targetId, { digest }]) => (claimed.has(digest) ? [] : [`steps[${String(index)}] on ${targetId}`])),
-  );
+  const unclaimed = [...shown.values()]
+    .flat()
+    .filter((candidate) => !candidate.claimed)
+    .toSorted((a, b) => a.index - b.index)
+    .map((candidate) => `steps[${String(candidate.index)}] on ${candidate.targetId}`);
   const edited = unclaimed.length === 0
     ? []
     : unmatched.map((entry): ReadRecording => ({
@@ -793,6 +816,7 @@ function readRecording(testId: string, entry: LockEntry, index: number, step: Re
   if (lock['paramsVerbatim'] !== false && paramsDigest(step.params) !== lock['paramsDigest']) {
     return invalid(`${where}: its params are not the ones its key was recorded for`);
   }
+  if ((step.call ?? 1) - 1 !== lock['callIndex']) return invalid(`${where}: its call is not the run of the act its key was recorded for`);
   const recordedFor = {
     testId,
     targetId: entry.target,
