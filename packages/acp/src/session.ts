@@ -122,7 +122,12 @@ export async function startSession(
   serving.catch(() => undefined);
   const toolServerFailed = serving.then(started => started.failed);
   toolServerFailed.catch(() => undefined);
-  const env = agentEnvironment({ ...process.env, ...launch.env });
+  const combinedEnv = { ...process.env, ...launch.env };
+  // Codex pins these variables before launch. Strip differently cased Windows
+  // duplicates before Node selects which copy reaches the child process.
+  const env = agentEnvironment(
+    launch.env?.['CODEX_CONFIG'] === undefined ? combinedEnv : normalizeCodexAuthEnvironment(combinedEnv),
+  );
   // A key the agent gets from its own `env` and not the runner's is one the run has not seen yet.
   registerProviderKeys(env);
   const child = spawn(launch.command, [...launch.args], {
@@ -267,6 +272,28 @@ export async function startSession(
       teardown();
     },
   };
+}
+
+/** Codex authentication variables have case-insensitive names in a Windows child process. */
+const CODEX_AUTH_ENV_NAMES = new Set(['CODEX_API_KEY', 'OPENAI_API_KEY', 'DEFAULT_AUTH_REQUEST', 'APP_SERVER_LOGS']);
+
+/**
+ * Use one canonical spelling for Codex auth variables before deciding how to
+ * sign in or spawning a Windows child. Object spread does not merge differently
+ * cased keys, but Windows does. Later entries win, so an explicit blank
+ * override also masks an inherited value. Other platforms remain case-sensitive.
+ */
+export function normalizeCodexAuthEnvironment<T extends string | undefined>(
+  env: Readonly<Record<string, T>>,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, T> {
+  if (platform !== 'win32') return { ...env };
+  const normalized: Record<string, T> = {};
+  for (const [name, value] of Object.entries(env)) {
+    const upper = name.toUpperCase();
+    normalized[CODEX_AUTH_ENV_NAMES.has(upper) ? upper : name] = value as T;
+  }
+  return normalized;
 }
 
 /**

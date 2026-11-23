@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 import { registerProviderKey } from 'e2e/agent';
 import { ConfigurationError } from 'e2e/engine';
 import { z } from 'zod';
-import { agentEnvironment, type AgentLaunch } from './session.ts';
+import { agentEnvironment, normalizeCodexAuthEnvironment, type AgentLaunch } from './session.ts';
 import type { AcpAgentOptions } from './types.ts';
 
 const execFileAsync = promisify(execFile);
@@ -80,17 +80,18 @@ export function codexLaunch(options: AcpAgentOptions): () => Promise<AgentLaunch
   const bin = binOf(pkg, 'codex-acp');
   let servers: Promise<string[]> | undefined;
   return async () => {
-    servers ??= codexServers(pkg, options.env);
+    const overrides = options.env === undefined ? undefined : normalizeCodexAuthEnvironment(options.env);
+    servers ??= codexServers(pkg, overrides);
     servers.catch(() => {
       servers = undefined;
     });
     const config = JSON.stringify(codexConfig(await servers));
     // Read at each session, so a request or key set after the first one counts, and pinned for it.
-    const auth = codexAuth(options.env);
+    const auth = codexAuth(overrides);
     return {
       command: process.execPath,
       args: [bin],
-      env: { ...options.env, ...auth.env, CODEX_CONFIG: config },
+      env: { ...overrides, ...auth.env, CODEX_CONFIG: config },
       model: options.model,
       mode: 'read-only',
       signIn: auth.signIn,
@@ -271,7 +272,7 @@ async function codexServers(adapter: string, env: Readonly<Record<string, string
       : [codexPath, []];
   try {
     const { stdout } = await execFileAsync(command, [...args, 'mcp', 'list', '--json'], {
-      env: agentEnvironment({ ...process.env, ...env }),
+      env: agentEnvironment(normalizeCodexAuthEnvironment({ ...process.env, ...env })),
       timeout: 30_000,
     });
     return CodexServerList.parse(JSON.parse(stdout)).map((server) => server.name);
