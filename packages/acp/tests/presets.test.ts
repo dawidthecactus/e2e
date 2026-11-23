@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { redactSecrets, registerProviderKey } from 'e2e/agent';
 import { acp, claudeCode, codex } from '../src/index.ts';
 import { codexLaunch } from '../src/presets.ts';
-import { normalizeCodexAuthEnvironment } from '../src/session.ts';
+import { mergeCodexAuthEnvironment, normalizeCodexAuthEnvironment } from '../src/session.ts';
 
 const AGENT = fileURLToPath(new URL('./fixtures/scripted-agent.ts', import.meta.url));
 const pass = { call: 'complete_step', args: { status: 'passed', summary: 'done' } };
@@ -167,43 +167,61 @@ describe('agent presets', () => {
   /** The request the preset sends: the method alone, never the key. */
   const API_KEY_LOGIN = logged('{"methodId":"api-key"}');
 
-  it('normalizes Codex auth overrides on Windows, with the last spelling winning even when blank', () => {
+  it('normalizes duplicate Windows auth spellings using Node lexical precedence', () => {
     const supplied = {
-      CODEX_API_KEY: 'inherited',
-      cOdEx_ApI_kEy: 'configured',
-      OPENAI_API_KEY: 'inherited-openai',
-      openai_api_key: '',
-      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
+      cOdEx_ApI_kEy: 'later',
+      CODEX_API_KEY: 'first',
+      openai_api_key: 'later',
+      OPENAI_API_KEY: '',
       default_auth_request: '',
+      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
+      App_Server_Logs: 'later',
       APP_SERVER_LOGS: '',
-      App_Server_Logs: 'configured-log',
       ACP_LOG: 'keep-other-vars-unchanged',
     };
     const normalized = normalizeCodexAuthEnvironment(supplied, 'win32');
     expect(normalized).toEqual({
+      CODEX_API_KEY: 'first',
+      OPENAI_API_KEY: '',
+      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
+      APP_SERVER_LOGS: '',
+      ACP_LOG: 'keep-other-vars-unchanged',
+    });
+    expect(normalizeCodexAuthEnvironment({ oPeNaI_aPi_KeY: 'mixed' }, 'win32')).toEqual({ OPENAI_API_KEY: 'mixed' });
+    expect(normalizeCodexAuthEnvironment(normalized, 'win32')).toEqual(normalized);
+  });
+
+  it('prefers explicit Windows overrides over inherited values, including blanks', () => {
+    const inherited = {
+      CODEX_API_KEY: 'inherited-codex',
+      OPENAI_API_KEY: 'inherited-openai',
+      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
+      APP_SERVER_LOGS: 'inherited-log',
+    };
+    const overrides = { codex_api_key: 'configured', openai_api_key: '', default_auth_request: '', app_server_logs: 'new-log' };
+    expect(mergeCodexAuthEnvironment(inherited, overrides, 'win32')).toEqual({
       CODEX_API_KEY: 'configured',
       OPENAI_API_KEY: '',
       DEFAULT_AUTH_REQUEST: '',
-      APP_SERVER_LOGS: 'configured-log',
-      ACP_LOG: 'keep-other-vars-unchanged',
+      APP_SERVER_LOGS: 'new-log',
     });
-    expect(normalizeCodexAuthEnvironment(normalized, 'win32')).toEqual(normalized);
+    expect(mergeCodexAuthEnvironment(inherited, undefined, 'win32')).toEqual(inherited);
   });
 
   it('preserves case-sensitive auth variables on POSIX platforms', () => {
     const supplied = { OPENAI_API_KEY: 'upper', openai_api_key: 'lower', DEFAULT_AUTH_REQUEST: 'upper', default_auth_request: '' };
     expect(normalizeCodexAuthEnvironment(supplied, 'linux')).toEqual(supplied);
     expect(normalizeCodexAuthEnvironment(supplied, 'darwin')).toEqual(supplied);
+    expect(mergeCodexAuthEnvironment({ OPENAI_API_KEY: 'inherited' }, { openai_api_key: 'override' }, 'linux')).toEqual({
+      OPENAI_API_KEY: 'inherited', openai_api_key: 'override',
+    });
   });
 
   it.skipIf(process.platform !== 'win32')('passes canonical Codex auth values to a real Windows child process', () => {
-    const env = normalizeCodexAuthEnvironment({
-      ...process.env,
-      OPENAI_API_KEY: 'inherited-test-value',
-      openai_api_key: 'override-test-value',
-      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
-      default_auth_request: '',
-    });
+    const env = mergeCodexAuthEnvironment(
+      { ...process.env, OPENAI_API_KEY: 'inherited-test-value', DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}' },
+      { openai_api_key: 'override-test-value', default_auth_request: '' },
+    );
     const script = `process.stdout.write(JSON.stringify({
       apiKey: process.env.OPENAI_API_KEY,
       request: process.env.DEFAULT_AUTH_REQUEST,

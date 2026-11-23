@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 import { registerProviderKey } from 'e2e/agent';
 import { ConfigurationError } from 'e2e/engine';
 import { z } from 'zod';
-import { agentEnvironment, normalizeCodexAuthEnvironment, type AgentLaunch } from './session.ts';
+import { agentEnvironment, mergeCodexAuthEnvironment, normalizeCodexAuthEnvironment, type AgentLaunch } from './session.ts';
 import type { AcpAgentOptions } from './types.ts';
 
 const execFileAsync = promisify(execFile);
@@ -272,7 +272,7 @@ async function codexServers(adapter: string, env: Readonly<Record<string, string
       : [codexPath, []];
   try {
     const { stdout } = await execFileAsync(command, [...args, 'mcp', 'list', '--json'], {
-      env: agentEnvironment(normalizeCodexAuthEnvironment({ ...process.env, ...env })),
+      env: agentEnvironment(mergeCodexAuthEnvironment(process.env, env)),
       timeout: 30_000,
     });
     return CodexServerList.parse(JSON.parse(stdout)).map((server) => server.name);

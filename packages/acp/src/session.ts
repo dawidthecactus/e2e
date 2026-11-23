@@ -123,10 +123,10 @@ export async function startSession(
   const toolServerFailed = serving.then(started => started.failed);
   toolServerFailed.catch(() => undefined);
   const combinedEnv = { ...process.env, ...launch.env };
-  // Codex pins these variables before launch. Strip differently cased Windows
-  // duplicates before Node selects which copy reaches the child process.
+  // Resolve case variants within inherited and explicit environments separately,
+  // so a Codex override wins even when Windows spells the inherited key differently.
   const env = agentEnvironment(
-    launch.env?.['CODEX_CONFIG'] === undefined ? combinedEnv : normalizeCodexAuthEnvironment(combinedEnv),
+    launch.env?.['CODEX_CONFIG'] === undefined ? combinedEnv : mergeCodexAuthEnvironment(process.env, launch.env),
   );
   // A key the agent gets from its own `env` and not the runner's is one the run has not seen yet.
   registerProviderKeys(env);
@@ -278,10 +278,9 @@ export async function startSession(
 const CODEX_AUTH_ENV_NAMES = new Set(['CODEX_API_KEY', 'OPENAI_API_KEY', 'DEFAULT_AUTH_REQUEST', 'APP_SERVER_LOGS']);
 
 /**
- * Use one canonical spelling for Codex auth variables before deciding how to
- * sign in or spawning a Windows child. Object spread does not merge differently
- * cased keys, but Windows does. Later entries win, so an explicit blank
- * override also masks an inherited value. Other platforms remain case-sensitive.
+ * Canonicalize Codex auth names on Windows. Node chooses the first key in
+ * lexicographic order when a subprocess env has case-insensitive duplicates;
+ * this must not depend on insertion order. POSIX keys remain case-sensitive.
  */
 export function normalizeCodexAuthEnvironment<T extends string | undefined>(
   env: Readonly<Record<string, T>>,
@@ -289,11 +288,27 @@ export function normalizeCodexAuthEnvironment<T extends string | undefined>(
 ): Record<string, T> {
   if (platform !== 'win32') return { ...env };
   const normalized: Record<string, T> = {};
-  for (const [name, value] of Object.entries(env)) {
+  for (const name of Object.keys(env).toSorted()) {
     const upper = name.toUpperCase();
-    normalized[CODEX_AUTH_ENV_NAMES.has(upper) ? upper : name] = value as T;
+    if (CODEX_AUTH_ENV_NAMES.has(upper)) {
+      if (!Object.hasOwn(normalized, upper)) normalized[upper] = env[name]!;
+    } else {
+      normalized[name] = env[name]!;
+    }
   }
   return normalized;
+}
+
+/** An explicit Codex option wins over inheritance, including an empty string. */
+export function mergeCodexAuthEnvironment(
+  inherited: NodeJS.ProcessEnv,
+  overrides: Readonly<Record<string, string>> | undefined,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return {
+    ...normalizeCodexAuthEnvironment(inherited, platform),
+    ...normalizeCodexAuthEnvironment(overrides ?? {}, platform),
+  };
 }
 
 /**
