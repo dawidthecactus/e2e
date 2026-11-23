@@ -1,6 +1,6 @@
 /** Replacing files that must agree: all of them, or on an error none. */
 
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -49,7 +49,9 @@ describe('writeFilesAtomic', () => {
   it('puts back the files it replaced when a later one fails', async () => {
     const directory = await makeDir();
     await writeFile(path.join(directory, 'a.yml'), 'old a', 'utf8');
-    const before = (await stat(path.join(directory, 'a.yml'))).ino;
+    // Dated an hour back: a file written again since is newer, whatever inode it gets.
+    const old = new Date(Date.now() - 3_600_000);
+    await utimes(path.join(directory, 'a.yml'), old, old);
     // A non-empty directory where the second file goes: it fails once the first file is already replaced.
     await mkdir(path.join(directory, 'a.lock.json', 'inside'), { recursive: true });
     await expect(
@@ -59,8 +61,8 @@ describe('writeFilesAtomic', () => {
       ]),
     ).rejects.toThrow();
     expect(await readFile(path.join(directory, 'a.yml'), 'utf8')).toBe('old a');
-    // Another file than the one there before: it was replaced, then its content put back.
-    expect((await stat(path.join(directory, 'a.yml'))).ino).not.toBe(before);
+    // Written again since: it was replaced, then its content put back.
+    expect((await stat(path.join(directory, 'a.yml'))).mtimeMs).toBeGreaterThan(old.getTime() + 60_000);
     expect((await readdir(directory)).toSorted()).toEqual(['a.lock.json', 'a.yml']);
   });
 

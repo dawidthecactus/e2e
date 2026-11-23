@@ -11,11 +11,12 @@
  * enumerate it, so it says so instead of listing an empty directory.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { readdir, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
 import picocolors from 'picocolors';
+import { isLockToken } from '@e2e-dev/core/lib/cache/file-lock';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION } from '@e2e-dev/core/lib/cache/store';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig } from '../config/resolve-run.ts';
@@ -71,8 +72,9 @@ const LEGACY_ENTRY_FILE = /^[a-f0-9]{64}\.json$/u;
 const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)\.[a-f0-9]{16}\.tmp$/u;
 /**
  * The lock a writer holds while it rewrites a test's files, or the one a
- * waiter holds while it takes over a stale lock: always empty, so a file of
- * that name with something in it is another tool's.
+ * waiter holds while it takes over a stale lock: it holds only its holder's
+ * token (`isLockToken`), so a file of that name holding anything else is
+ * another tool's.
  */
 const LOCK_FILE = /^\.[a-z0-9-]+\.writing(?:\.takeover)?$/u;
 
@@ -97,8 +99,16 @@ function workingFile(directory: string, name: string): 'stale' | 'live' | undefi
   } catch {
     return undefined;
   }
-  if (!temporary && file.size !== 0) return undefined;
+  if (!temporary && !isOwnLock(path.join(directory, name))) return undefined;
   return Date.now() - file.mtimeMs > LEFTOVER_MS ? 'stale' : 'live';
+}
+
+function isOwnLock(file: string): boolean {
+  try {
+    return isLockToken(readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
 }
 
 /** Characters of a step's instruction a row prints. */

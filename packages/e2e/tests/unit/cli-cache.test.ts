@@ -225,8 +225,8 @@ describe('e2e cache clear', () => {
     writeFileSync(path.join(directory, 'a-torn.yml'), '# Replay recording of one e2e test. Review it\nsteps: [ torn', 'utf8');
     writeFileSync(path.join(directory, `${'c'.repeat(64)}.json`), 'torn', 'utf8');
     writeFileSync(path.join(directory, 'a-torn.yml.0123456789abcdef.tmp'), '{}', 'utf8');
-    writeFileSync(path.join(directory, '.a-torn.writing'), '', 'utf8');
-    writeFileSync(path.join(directory, '.a-torn.writing.takeover'), '', 'utf8');
+    writeFileSync(path.join(directory, '.a-torn.writing'), 'c'.repeat(32), 'utf8');
+    writeFileSync(path.join(directory, '.a-torn.writing.takeover'), 'c'.repeat(32), 'utf8');
     // A crashed writer's: old enough to be stale.
     const old = new Date(Date.now() - 60_000);
     for (const name of readdirSync(directory)) utimesSync(path.join(directory, name), old, old);
@@ -263,7 +263,7 @@ describe('e2e cache clear', () => {
   it('leaves the lock and temporary file of a writer still at work', async () => {
     const directory = path.join(root, CACHE_DIR);
     mkdirSync(directory, { recursive: true });
-    writeFileSync(path.join(directory, '.a-live.writing'), '', 'utf8');
+    writeFileSync(path.join(directory, '.a-live.writing'), 'c'.repeat(32), 'utf8');
     writeFileSync(path.join(directory, 'a-live.yml.0123456789abcdef.tmp'), 'half', 'utf8');
     await invoke('cache', 'clear');
     expect(readdirSync(directory).toSorted()).toEqual(['.a-live.writing', 'a-live.yml.0123456789abcdef.tmp']);

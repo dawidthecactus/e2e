@@ -14,6 +14,8 @@ import { MAX_PARAMS_DEPTH, validateJsonValue } from '@e2e-dev/core/lib/internal/
 import type { JsonValue } from '@e2e-dev/core/lib/types';
 
 const KEY = 'a'.repeat(64);
+/** What a lock file holds: its holder's token. */
+const LOCK_TOKEN = 'c'.repeat(32);
 const OTHER_KEY = 'b'.repeat(64);
 const TEST_ID = 'tests/settings.e2e.ts::settings::upgrades%20the%20plan';
 const NAME = 'settings-upgrades-the-plan';
@@ -338,7 +340,7 @@ describe('FileCacheStore', () => {
   it('takes over the lock a writer that died holding it left behind', async () => {
     const { directory, store } = await makeStore();
     const stale = path.join(directory, `.${NAME}.writing`);
-    await writeFile(stale, '', 'utf8');
+    await writeFile(stale, LOCK_TOKEN, 'utf8');
     const old = new Date(Date.now() - 60_000);
     await utimes(stale, old, old);
     expect(await store.write(KEY, payload())).toBeDefined();
@@ -369,7 +371,7 @@ describe('FileCacheStore', () => {
       expect(await holdsFileLock(lock)).toBe(true);
       // Taken over while this holder stalled past the stale age: the file there now is another writer's.
       await rm(lock);
-      await writeFile(lock, '', 'utf8');
+      await writeFile(lock, LOCK_TOKEN, 'utf8');
       expect(await holdsFileLock(lock)).toBe(false);
     });
     expect(await readdir(directory)).toEqual(['.test.writing']);
@@ -378,7 +380,7 @@ describe('FileCacheStore', () => {
   it('lets one of several processes at a time take over a stale lock', async () => {
     const { directory } = await makeStore();
     const lock = path.join(directory, '.test.writing');
-    await writeFile(lock, '', 'utf8');
+    await writeFile(lock, LOCK_TOKEN, 'utf8');
     const old = new Date(Date.now() - 60_000);
     await utimes(lock, old, old);
     // Each process creates a marker while it holds the lock; a second holder at once fails to create it.
@@ -611,7 +613,7 @@ describe('FileCacheStore', () => {
     await store.write(KEY, payload());
     // Another process holds the test's lock, halfway through replacing its files.
     const held = path.join(directory, `.${NAME}.writing`);
-    await writeFile(held, '', 'utf8');
+    await writeFile(held, LOCK_TOKEN, 'utf8');
     const readOnly = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
     let settled = false;
     const pending = readOnly.read(KEY, step()).finally(() => {
@@ -637,7 +639,7 @@ describe('FileCacheStore', () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload());
     const held = path.join(directory, `.${NAME}.writing`);
-    await writeFile(held, '', 'utf8');
+    await writeFile(held, LOCK_TOKEN, 'utf8');
     let settled = false;
     const pending = store.list().finally(() => {
       settled = true;
@@ -652,7 +654,7 @@ describe('FileCacheStore', () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload());
     const held = path.join(directory, `.${NAME}.writing`);
-    await writeFile(held, '', 'utf8');
+    await writeFile(held, LOCK_TOKEN, 'utf8');
     const pending = store.clear(NAME);
     await new Promise((resolve) => setTimeout(resolve, 100));
     // The writer that held the lock finishes a new recording of the test before the clear goes ahead.

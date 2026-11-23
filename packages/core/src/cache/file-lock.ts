@@ -6,12 +6,14 @@
  * would drop the first writer's recording.
  *
  * In one process the holders queue on a promise; across processes on a
- * file created with `wx`. A lock file older than `STALE_MS` was left by a
- * writer that died holding it, since no holder keeps it longer than a
- * file read and two writes, and is taken over (`takeOver`).
+ * file created with `wx`, holding a token only its holder knows. A lock
+ * file older than `STALE_MS` was left by a writer that died holding it,
+ * since no holder keeps it longer than a file read and two writes, and is
+ * taken over (`takeOver`).
  */
 
-import { open, stat, unlink } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { open, readFile, stat, unlink } from 'node:fs/promises';
 import { sleep } from '../internal/time.ts';
 
 /**
@@ -28,8 +30,20 @@ const STALE_MS = 30_000;
 /** The tail of the queue of holders in this process, by lock path. */
 const queues = new Map<string, Promise<void>>();
 
-/** The inode of each lock file this process holds, by lock path: how a holder tells its file from a successor's. */
-const heldFiles = new Map<string, number>();
+/**
+ * The token in each lock file this process holds, by lock path: how a
+ * holder tells its file from a successor's. Not the inode, which a
+ * filesystem may hand the successor's new file as soon as the old one goes.
+ */
+const heldTokens = new Map<string, string>();
+
+/** What a lock file this module writes holds: one holder's random token. */
+const LOCK_TOKEN = /^[a-f0-9]{32}$/u;
+
+/** Whether a file's text is a lock this module wrote; anything else at a lock path is another tool's. */
+export function isLockToken(text: string): boolean {
+  return LOCK_TOKEN.test(text);
+}
 
 /** Runs `operation` holding the lock at `lockPath`, and releases it however `operation` ends. */
 export async function withFileLock<T>(lockPath: string, operation: () => Promise<T>): Promise<T> {
@@ -42,13 +56,13 @@ export async function withFileLock<T>(lockPath: string, operation: () => Promise
   queues.set(lockPath, tail);
   await previous;
   try {
-    heldFiles.set(lockPath, await acquire(lockPath));
+    heldTokens.set(lockPath, await acquire(lockPath));
     try {
       return await operation();
     } finally {
       // A holder paused past `STALE_MS` lost the lock to a takeover: the file there now is its successor's.
       if (await holdsFileLock(lockPath)) await unlink(lockPath).catch(() => undefined);
-      heldFiles.delete(lockPath);
+      heldTokens.delete(lockPath);
     }
   } finally {
     release();
@@ -63,25 +77,38 @@ export async function withFileLock<T>(lockPath: string, operation: () => Promise
  * read before or remove its successor's lock.
  */
 export async function holdsFileLock(lockPath: string): Promise<boolean> {
-  const ino = heldFiles.get(lockPath);
-  if (ino === undefined) return true;
-  return stat(lockPath).then((stats) => stats.ino === ino, () => false);
+  const token = heldTokens.get(lockPath);
+  if (token === undefined) return true;
+  return readFile(lockPath, 'utf8').then((text) => text === token, () => false);
 }
 
-/** Takes the lock file, returning its inode. */
-async function acquire(lockPath: string): Promise<number> {
+/** Creates a lock file holding a fresh token, returning the token; undefined when the file exists already. */
+async function create(lockPath: string): Promise<string | undefined> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(lockPath, 'wx', 0o600);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
+    throw cause;
+  }
+  const token = randomBytes(16).toString('hex');
+  try {
+    await handle.writeFile(token, 'utf8');
+  } catch (cause) {
+    await unlink(lockPath).catch(() => undefined);
+    throw cause;
+  } finally {
+    await handle.close();
+  }
+  return token;
+}
+
+/** Takes the lock file, returning its token. */
+async function acquire(lockPath: string): Promise<string> {
   const deadline = Date.now() + WAIT_MS;
   for (;;) {
-    try {
-      const handle = await open(lockPath, 'wx', 0o600);
-      try {
-        return (await handle.stat()).ino;
-      } finally {
-        await handle.close();
-      }
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
-    }
+    const token = await create(lockPath);
+    if (token !== undefined) return token;
     if (Date.now() > deadline) throw new Error(`the replay cache file is locked by another writer: ${lockPath}`);
     // A takeover that could not remove the file (another user's, say) is retried like a live lock: paced, and only until the deadline.
     if (await isStale(lockPath)) await takeOver(lockPath);
@@ -90,13 +117,14 @@ async function acquire(lockPath: string): Promise<number> {
 }
 
 /**
- * Whether the file at `path` is a lock a dead holder left: empty, as every
- * lock this module takes is, and older than `STALE_MS`. A file with
- * something in it is another tool's, whatever its age, and is never removed.
+ * Whether the file at `path` is a lock a dead holder left: a token, as
+ * every lock this module takes holds, older than `STALE_MS`. Any other file
+ * is another tool's, whatever its age, and is never removed.
  */
 async function isStale(path: string): Promise<boolean> {
   const stats = await stat(path).catch(() => undefined);
-  return stats !== undefined && stats.size === 0 && Date.now() - stats.mtimeMs > STALE_MS;
+  if (stats === undefined || Date.now() - stats.mtimeMs <= STALE_MS) return false;
+  return readFile(path, 'utf8').then(isLockToken, () => false);
 }
 
 /**
@@ -108,10 +136,7 @@ async function isStale(path: string): Promise<boolean> {
  */
 async function takeOver(lockPath: string): Promise<void> {
   const guard = `${lockPath}.takeover`;
-  try {
-    await (await open(guard, 'wx', 0o600)).close();
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
+  if ((await create(guard)) === undefined) {
     // Held only for a stat and an unlink, so an old one was left by a waiter that died there.
     if (await isStale(guard)) await unlink(guard).catch(() => undefined);
     return;
