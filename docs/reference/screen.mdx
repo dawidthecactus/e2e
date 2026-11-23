@@ -43,7 +43,8 @@ after whitespace normalization: `getByRole('button', 'Save')` does not match
 `Save changes`. `{ exact: false }` makes it a case-insensitive substring
 match, and a `RegExp` matches as written.
 
-Every query accepts `visible: true`; see
+Every query accepts `visible: true`, and the config's
+[`locators`](/reference/config#locators) can make it the default; see
 [Hidden duplicates](#hidden-duplicates).
 
 #### `getByRole`
@@ -261,6 +262,20 @@ await browser.reload();
 await expect(screen.getByText('No memories yet', { visible: true })).toBeVisible();
 await screen.getByPlaceholder('Search memory...', { visible: true }).fill('launch');
 await screen.getByTestId('memory-list', { visible: true }).getByRole('listitem').first().tap();
+```
+
+When most queries need it, such as on a native app that keeps earlier
+screens mounted behind the current one, set
+[`locators: { visible: true }`](/reference/config#locators) in the config or
+on a target. `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId`
+then skip hidden nodes without the option, and `{ visible: false }` on a
+query keeps them.
+
+```ts title="e2e.config.ts"
+export default {
+  targets: [{ engine: mobile({ platform: 'ios' }), app: { bundleId: 'com.example.app' } }],
+  locators: { visible: true },
+} satisfies E2EConfig;
 ```
 
 `visible` uses the same visibility check as `toBeVisible()`, `isVisible()`,
@@ -1355,7 +1370,9 @@ export interface TextMatchOptions {
    * When true, nodes the platform reports as hidden are excluded before the
    * exactly-one rule is applied, so a visible node with a hidden twin (a
    * prerendered copy kept after navigation, a closed drawer) still resolves.
-   * Omitted or false keeps every match, hidden ones included.
+   * False keeps every match, hidden ones included. Omitted, `getByText`,
+   * `getByLabel`, `getByPlaceholder`, and `getByTestId` take the target's
+   * `locators.visible`, and every other query false.
    */
   visible?: boolean;
 }

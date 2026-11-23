@@ -51,6 +51,7 @@ export default {
 | [`artifacts`](#artifacts) | `ArtifactsConfig` | local only |
 | [`trace`](#trace) | `RecordingMode` | `'retain-on-failure'` |
 | [`video`](#video) | `RecordingMode` | `'off'` |
+| [`locators`](#locators) | `LocatorsConfig` | `{ visible: false }` |
 | [`agents`](#agents) | `Record<string, AgentConfig>` | `default`, no model |
 | [`filters`](#filters) | `TestFilter[]` | - |
 | [`cache`](#cache) | `CacheMode \| CacheConfig` | `'read-write'`, `'read-only'` in CI |
@@ -283,6 +284,26 @@ reporters: ['list', 'junit'], // default: ['list']
 An id is its factory called with no options. An unknown id is
 `INVALID_CONFIG`. See [Reporters](/reference/reporters).
 
+#### `locators`
+
+Defaults for screen queries. `visible: true` makes `getByText`, `getByLabel`,
+`getByPlaceholder`, and `getByTestId` skip hidden nodes, as if each query
+passed `{ visible: true }`.
+
+```ts
+locators: { visible: true }, // default: { visible: false }
+```
+
+- A target's `locators` replaces it for that target.
+- A query's own `visible` wins over both:
+  `screen.getByText('Saved', { visible: false })` keeps hidden matches.
+- `getByRole` never matches a hidden node, and `getByDisplayValue` keeps
+  its own default, `false`.
+- `run_code` in an [`e2e mcp`](/reference/mcp) session applies it too.
+- A value that is not an object, a `visible` that is not a boolean, or an
+  unknown key is `INVALID_CONFIG`.
+- See [Hidden duplicates](/reference/screen#hidden-duplicates).
+
 ### targets
 
 A target is one named surface tests run on: the app under test and the
@@ -304,6 +325,7 @@ targets: [
 | [`app`](#the-app-under-test) | `TargetApp` | - |
 | [`trace`](#trace) | `RecordingMode` | the config's `trace` |
 | [`video`](#video) | `RecordingMode` | the config's `video` |
+| [`locators`](#locators) | `LocatorsConfig` | the config's `locators` |
 
 - `{ engine: web(), app: { url } }` is a complete target.
 - A test whose `requires` names a capability the target lacks is skipped for
@@ -1634,6 +1656,8 @@ export interface E2EConfig {
   trace?: RecordingMode;
   /** Which attempts record a video; default `off`. */
   video?: RecordingMode;
+  /** Defaults for screen queries on every target; a target's `locators` wins over it. */
+  locators?: LocatorsConfig;
   /** The results directory, relative to the project root; default `.e2e`. */
   output?: string;
   /** Output renderers and reporter objects; default `['list']`. */
@@ -1671,6 +1695,18 @@ export interface Target {
   trace?: RecordingMode;
   /** Which attempts on this target record a video, in place of the config's `video`. */
   video?: RecordingMode;
+  /** Defaults for this target's screen queries, in place of the config's `locators`. */
+  locators?: LocatorsConfig;
+}
+```
+
+### `LocatorsConfig`
+
+```ts
+/** Defaults for screen queries, which an option on the query itself replaces. */
+export interface LocatorsConfig {
+  /** The `visible` option of `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId`; default false. */
+  visible?: boolean;
 }
 ```
 

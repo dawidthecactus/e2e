@@ -160,6 +160,7 @@ const TOP_LEVEL_KEYS = new Set([
   'output',
   'trace',
   'video',
+  'locators',
   'reporters',
   'agents',
   'filters',
@@ -245,9 +246,11 @@ export function resolveProjectConfig(
   }
 
   const recordings = runRecordings(raw, cli);
+  const visible = locatorsVisible(raw.locators, 'locators');
   const targets = resolveTargets(raw.targets, options.projectRoot, (target, where) => ({
     trace: targetRecording(recordings.trace, target.trace, `${where} trace`, 'trace'),
     video: targetRecording(recordings.video, target.video, `${where} video`, 'video'),
+    locators: { visible: locatorsVisible(target.locators, `${where} locators`) ?? visible ?? false },
   }));
   const tests = normalizeTests(raw.tests, options.projectRoot);
 
@@ -686,6 +689,19 @@ function targetRecording(run: RunRecording, own: unknown, where: string, kind: R
   return { mode: run.fallback, source: 'default' };
 }
 
+/** The `visible` default a `locators` object sets, checked; undefined when it sets none. */
+function locatorsVisible(value: unknown, where: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} must be an object, got ${describeValue(value)}`);
+  }
+  rejectUnknownKeys(where, value, ['visible']);
+  const { visible } = value;
+  if (visible !== undefined && typeof visible !== 'boolean') {
+    throw new ConfigurationError('INVALID_CONFIG', `${where}.visible must be a boolean, got ${describeValue(visible)}`);
+  }
+  return visible;
+}
 
 function isArtifactStore(value: unknown): value is ArtifactStore {
   return (

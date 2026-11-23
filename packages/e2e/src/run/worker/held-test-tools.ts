@@ -468,6 +468,7 @@ export class HeldTestTools {
       },
       runCode: {
         engineFixtures: Object.keys(this.target.engine?.fixtures ?? {}),
+        locators: this.target.locators,
         attempt: (requestSignal) => {
           const statementBudget = new AttemptBudget(requestSignal ?? signal, new Deadline(Number.POSITIVE_INFINITY));
           const steps = new StepRecorder(this.attemptId, { redact });

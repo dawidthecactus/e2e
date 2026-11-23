@@ -26,6 +26,7 @@ import { redactNode, type NodeRedaction } from '@e2e-dev/core/lib/agent/observat
 import { recordPolicyEvent } from '@e2e-dev/core/lib/agent/phases';
 import type { ScreenPresenter } from '@e2e-dev/core/lib/agent/screen-update';
 import { authorizeSecretFill } from '@e2e-dev/core/lib/agent/secrets';
+import type { ResolvedTarget } from '@e2e-dev/core/lib/config/targets';
 import type { TargetSession } from '@e2e-dev/core/lib/engine/surface';
 import { createAsyncExpectation } from '../expect/async.ts';
 import { classifyError, codedMessage, ConfigurationError, TestError, type E2EError } from '@e2e-dev/core/lib/internal/errors';
@@ -59,6 +60,8 @@ export interface RunCodeSession {
   readonly attempt: (signal: AbortSignal | undefined) => RunCodeAttempt;
   /** The fixtures the target's engine contributes, which `run_code` names in a refusal and never runs. */
   readonly engineFixtures: readonly string[];
+  /** The target's query defaults, which the session's screen applies as a test's does. */
+  readonly locators: ResolvedTarget['locators'];
 }
 
 interface RunCodeOptions extends RunCodeSession {
@@ -121,7 +124,7 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   refuseMarkerExpectations(statements);
   if (runtime.config.allSecrets.size > 0) refuseLocatorsByPart(statements);
   const timeout = args.timeout ?? RUN_CODE_TIMEOUT_MS;
-  const runner = new LineRunner(attempt);
+  const runner = new LineRunner(attempt, options.locators);
   const outcomes: Outcome[] = [];
   for (const statement of statements) {
     if (signal?.aborted === true) break;
@@ -229,7 +232,7 @@ function findsByPart(call: Call): boolean {
  * A screen over the attempt's engine session whose every read passes the
  * secret ledger, wired like the attempt's own through the same factory.
  */
-function redactingScreen(attempt: RunCodeAttempt): Screen {
+function redactingScreen(attempt: RunCodeAttempt, locators: ResolvedTarget['locators']): Screen {
   const runtime = attempt.agentRuntime;
   const redaction: NodeRedaction = { redact: runtime.redact, redactCut: runtime.redactCut };
   return createScreen(
@@ -243,6 +246,7 @@ function redactingScreen(attempt: RunCodeAttempt): Screen {
       secrets: runtime.secrets,
       redaction,
       appOrigin: runtime.app.base?.origin,
+      locators,
     }),
   );
 }
@@ -261,8 +265,8 @@ class LineRunner {
   private readonly screen: Screen;
   private readonly app: App;
 
-  constructor(private readonly attempt: RunCodeAttempt) {
-    this.screen = redactingScreen(attempt);
+  constructor(private readonly attempt: RunCodeAttempt, locators: ResolvedTarget['locators']) {
+    this.screen = redactingScreen(attempt, locators);
     this.app = attempt.fixtures.app;
   }
 

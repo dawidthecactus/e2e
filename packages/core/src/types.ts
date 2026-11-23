@@ -427,7 +427,9 @@ export interface TextMatchOptions {
    * When true, nodes the platform reports as hidden are excluded before the
    * exactly-one rule is applied, so a visible node with a hidden twin (a
    * prerendered copy kept after navigation, a closed drawer) still resolves.
-   * Omitted or false keeps every match, hidden ones included.
+   * False keeps every match, hidden ones included. Omitted, `getByText`,
+   * `getByLabel`, `getByPlaceholder`, and `getByTestId` take the target's
+   * `locators.visible`, and every other query false.
    */
   visible?: boolean;
 }
@@ -1536,6 +1538,14 @@ export interface Target {
    * `UNSUPPORTED_ARTIFACT`.
    */
   video?: RecordingMode;
+  /** Defaults for this target's screen queries, in place of the config's `locators`. */
+  locators?: LocatorsConfig;
+}
+
+/** Defaults for screen queries, which an option on the query itself replaces. */
+export interface LocatorsConfig {
+  /** The `visible` option of `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId`; default false. */
+  visible?: boolean;
 }
 
 /**
@@ -1818,6 +1828,8 @@ export interface ProjectConfig {
    * Applies to the targets whose engine can record.
    */
   video?: RecordingMode;
+  /** Defaults for screen queries on every target; a target's `locators` wins over it. */
+  locators?: LocatorsConfig;
   /**
    * The directory a run writes its results to, relative to the project root;
    * default `.e2e`. It holds `report.json`, `junit.xml`, `summary.md`,
