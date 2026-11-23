@@ -20,7 +20,8 @@
  * replace the filesystem without the harness noticing.
  */
 
-import { mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeFilesAtomic } from '../internal/atomic-write.ts';
 import { errorMessage } from '../internal/errors.ts';
@@ -205,13 +206,14 @@ export class FileCacheStore implements CacheStore {
   /**
    * Runs `operation` under the lock of the test's base name when this store
    * writes; a read-only store has no writer to wait for. Only a write creates
-   * the directory: a read or a delete in a directory that does not exist has
-   * nothing to wait for either, and leaves no directory behind.
+   * the directory: a read or a delete in a directory that does not exist, or
+   * that no one can write (a read-only mount), has nothing to wait for
+   * either, and leaves nothing behind.
    */
   private async locked<T>(base: string, operation: () => Promise<T>, creates = false): Promise<T> {
     if (!this.writable) return operation();
     if (creates) await mkdir(this.directory, { recursive: true });
-    else if (!(await stat(this.directory).then((stats) => stats.isDirectory(), () => false))) return operation();
+    else if (!(await access(this.directory, constants.W_OK).then(() => true, () => false))) return operation();
     return withFileLock(join(this.directory, `.${base}.writing`), operation);
   }
 

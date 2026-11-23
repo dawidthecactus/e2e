@@ -1,6 +1,6 @@
 /** The file store: one reviewable YAML file and one generated lock per test, fail-to-miss reads. */
 
-import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -315,6 +315,18 @@ describe('FileCacheStore', () => {
     // Recording the step again under its own key is the repair.
     expect(await store.write(OTHER_KEY, payload('web', { recordedFor: second }))).toBeDefined();
     expect((await store.read(OTHER_KEY, second)).status).toBe('hit');
+  });
+
+  // Root writes anywhere, and Windows ignores the mode: neither has a directory to refuse the lock.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads from a directory it cannot write, as on a read-only mount', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    await chmod(directory, 0o555);
+    try {
+      expect((await store.read(KEY, step())).status).toBe('hit');
+    } finally {
+      await chmod(directory, 0o755);
+    }
   });
 
   it('refuses to write a file over its byte cap', async () => {
