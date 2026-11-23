@@ -55,10 +55,9 @@ interface CacheEntrySummary {
 interface CacheContents {
   readonly directory: string;
   readonly entries: readonly CacheEntrySummary[];
-  /** The recording files' names and sizes, each file pair once. */
   /** Each test's pair: its name, size, and the files in it the store wrote. */
   readonly files: readonly { readonly name: string; readonly bytes: number; readonly owned: readonly string[] }[];
-  /** Recordings, or whole file pairs, the store could not read: a miss to the runner too. */
+  /** Recordings, or whole file pairs, the store could not read: an `invalid-entry` to the runner, never a replay. */
   readonly unreadable: readonly { readonly file: string; readonly reason: string }[];
   /** Entries an older e2e wrote, one digest-named `.json` file each, which no run reads. */
   readonly legacy: readonly string[];
@@ -368,7 +367,7 @@ async function removeTemporaries(directory: string): Promise<number> {
 function warnAboutSkipped(contents: CacheContents): void {
   if (contents.unreadable.length > 0) {
     process.stderr.write(
-      `${contents.unreadable.length} recording(s) in ${contents.directory} are not readable; a run treats each as a miss:\n${contents.unreadable.map((item) => `  ${sanitizeText(item.reason)}`).join('\n')}\n`,
+      `${contents.unreadable.length} recording(s) in ${contents.directory} are not readable; a run never replays them (invalid-entry):\n${contents.unreadable.map((item) => `  ${sanitizeText(item.reason)}`).join('\n')}\n`,
     );
   }
   if (contents.legacy.length > 0) {

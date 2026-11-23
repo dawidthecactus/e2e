@@ -47,7 +47,7 @@ export interface WriteTracePagesOptions {
   readonly projectRoot: string;
   /** `<output>/results`: the report's artifact paths are relative to it, and each page goes in its test's directory there. */
   readonly resultsRoot: string;
-  /** Absolute replay cache directory, where a step's entry file is; absent when a custom store holds the cache. */
+  /** Absolute replay cache directory, where the test's recording file is; absent when a custom store holds the cache. */
   readonly cacheDir?: string | undefined;
 }
 
