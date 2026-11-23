@@ -245,6 +245,28 @@ describe('FileCacheStore', () => {
     expect((await store.read(OTHER_KEY, step('web', { testId: spelled }))).status).toBe('miss');
   });
 
+  it('finds a later step filed under the redacted id while the test has a file under the spelled one', async () => {
+    const { store } = await makeStore();
+    const spelled = 'tests/login.e2e.ts::logs in as alice@example.com';
+    const redacted = 'tests/login.e2e.ts::logs in as <secret:email>';
+    const named = (testId: string, instruction: string) => step('web', { testId, instruction, instructionDigest: instructionDigest(instruction) });
+    // One attempt recorded its first step before it learned the address, and its second after.
+    await store.write(KEY, payload('web', { recordedFor: named(spelled, 'open the login page') }));
+    await store.write(OTHER_KEY, payload('web', { recordedFor: named(redacted, 'sign in') }));
+    expect((await store.read(OTHER_KEY, named(spelled, 'sign in'))).status).toBe('hit');
+  });
+
+  it('evicts a recording where a read found it under the redacted id', async () => {
+    const { directory, store } = await makeStore();
+    const spelled = step('web', { testId: 'tests/login.e2e.ts::logs in as alice@example.com' });
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: 'tests/login.e2e.ts::logs in as <secret:email>' }) }));
+    expect((await store.read(KEY, spelled)).status).toBe('hit');
+    await store.delete(KEY, spelled);
+    const fresh = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
+    expect((await fresh.read(KEY, spelled)).status).toBe('miss');
+    expect((await store.read(KEY, spelled)).status).toBe('miss');
+  });
+
   it('names the file a test with a long id records into', async () => {
     const { directory, store } = await makeStore();
     const longId = `tests/${'component/'.repeat(460)}pay.e2e.ts::pays`;

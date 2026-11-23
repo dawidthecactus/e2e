@@ -38,13 +38,16 @@ import {
   type ParsedRecordingFile,
   type StoredRecording,
 } from './recording-file.ts';
-import { collisionName, RECORDING_NAME, recordingName } from './recording-name.ts';
+import { collisionName, RECORDING_NAME, recordingName, recordingPrefix } from './recording-name.ts';
 import { MAX_TRACE_END_WAIT_MS, MAX_TRACE_TEST_ID_CHARS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
 
 /** Hard wire ceiling on one stored file, on both the read and the write path. */
 export const MAX_CACHE_WIRE_BYTES = 1_048_576;
 
 const KEY_HASH = /^[a-f0-9]{64}$/u;
+
+/** Each pair as last read, by its path and the store's size cap, beside the identity of its files then (`load`). */
+const loadedPairs = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
 
 /** The suffix a colliding test's name carries after its base name (`collisionName`). */
 const COLLISION_SUFFIX = /--[a-f0-9]{12}$/u;
@@ -115,10 +118,6 @@ export class FileCacheStore implements CacheStore {
 
   private readonly directory: string;
   private readonly maxBytes: number;
-  /** Each pair as last read, beside the identity of its files then (`load`). */
-  private readonly loaded = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
-  /** The directory as listed for a step whose test has no file under its name (`read`). */
-  private listing: Promise<ListedRecordingFile[]> | undefined;
   /** The steps read for each test, in the order they were read: where a step new to a file goes (`placeFor`). */
   private readonly readOrder = new Map<string, string[]>();
 
@@ -144,18 +143,10 @@ export class FileCacheStore implements CacheStore {
       if (file === undefined) return undefined;
       // The test's own pair that does not read may hold any of its steps: none of them is a miss.
       if (file.parsed.status === 'invalid') return { status: 'invalid', reason: file.parsed.reason, bytes: file.bytes };
-      return findEntry(file, keyHash) ?? { status: 'miss' };
+      return findEntry(file, keyHash);
     });
     if (own !== undefined) return own;
-    // No file under the test's name as this step gives it. A recording made after the run learned a
-    // secret the test's id spells is named for the id redacted, which a lookup made before the run learns
-    // it (the next run's) cannot name: the key still finds it. One listing serves the attempt.
-    this.listing ??= this.list();
-    for (const file of await this.listing) {
-      const found = findEntry(file, keyHash);
-      if (found !== undefined) return found;
-    }
-    return { status: 'miss' };
+    return (await this.findElsewhere(keyHash, step.testId))?.found ?? { status: 'miss' };
   }
 
   async write(keyHash: string, payload: ActionTrace): Promise<{ bytes: number } | undefined> {
@@ -189,7 +180,16 @@ export class FileCacheStore implements CacheStore {
 
   async delete(keyHash: string, step?: TraceProvenance): Promise<void> {
     if (!this.writable || !KEY_HASH.test(keyHash)) return;
-    const testId = step?.testId ?? (await this.list()).find((file) => findEntry(file, keyHash) !== undefined)?.parsed.testId;
+    let testId = step?.testId ?? (await this.list()).find((file) => findEntry(file, keyHash) !== undefined)?.parsed.testId;
+    if (step !== undefined) {
+      const base = recordingName(step.testId);
+      const holds = await this.locked(base, async () => {
+        const file = await this.locate(base, step.testId);
+        return file !== undefined && findEntry(file, keyHash) !== undefined;
+      });
+      // Evict where the read found it, which may be under the test's name redacted (`findElsewhere`).
+      if (!holds) testId = (await this.findElsewhere(keyHash, step.testId))?.file.parsed.testId ?? step.testId;
+    }
     if (testId === undefined) return;
     const base = recordingName(testId);
     await this.locked(base, async () => {
@@ -231,6 +231,39 @@ export class FileCacheStore implements CacheStore {
       if (file !== undefined && file.unconfirmed !== true) files.push(file);
     }
     return files;
+  }
+
+  /**
+   * A key's recording in another pair of the same test file than the one
+   * the step's test id names. A recording made after the run learned a
+   * secret the test's id spells is filed under the id redacted, which a
+   * lookup made before the run learns it (the next run's) cannot name, and
+   * one attempt can file a test's steps under both. The other spelling
+   * differs only in the titles, so only pairs of the test's file are read.
+   */
+  private async findElsewhere(keyHash: string, testId: string): Promise<{ readonly file: LoadedFile; readonly found: CacheReadResult } | undefined> {
+    const prefix = recordingPrefix(testId);
+    const base = recordingName(testId);
+    const own = new Set([base, collisionName(base, testId)]);
+    let names: string[];
+    try {
+      names = await readdir(this.directory);
+    } catch {
+      return undefined;
+    }
+    const stems = new Set(names.flatMap((name) => {
+      const stem = recordingStem(name);
+      return stem === undefined || own.has(stem) || !(stem === prefix || stem.startsWith(`${prefix}-`)) ? [] : [stem];
+    }));
+    for (const stem of [...stems].toSorted()) {
+      const result = await this.locked(stem.replace(COLLISION_SUFFIX, ''), async () => {
+        const file = await this.load(stem);
+        const found = file === undefined ? undefined : findEntry(file, keyHash);
+        return file === undefined || found === undefined ? undefined : { file, found };
+      });
+      if (result !== undefined) return result;
+    }
+    return undefined;
   }
 
   private noteRead(step: TraceProvenance): void {
@@ -308,10 +341,12 @@ export class FileCacheStore implements CacheStore {
       stat(this.path(name, extension)).then((stats) => `${stats.ino}:${stats.size}:${stats.mtimeMs}`, () => '-'),
     ));
     const stamp = stamps.join(' ');
-    const known = this.loaded.get(name);
+    // Shared by every store on the directory: a worker's attempts each make their own.
+    const memo = `${String(this.maxBytes)}\0${this.path(name, '')}`;
+    const known = loadedPairs.get(memo);
     if (known?.stamp === stamp) return known.file;
     const file = await this.readPair(name);
-    this.loaded.set(name, { stamp, file });
+    loadedPairs.set(memo, { stamp, file });
     return file;
   }
 
