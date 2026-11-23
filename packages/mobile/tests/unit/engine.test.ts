@@ -790,11 +790,41 @@ describe('lifecycle', () => {
     expect(await bound(smokeAlone.prepare(info))).toMatch(/^rejected: open Settings failed: Device is already in use by session "transient:smoke-0"; no other booted ios device is free for worker slot 0: boot another one$/);
 
     // Two slots on the only two devices, a live session takes the first one's at the open: the other slot's device is
-    // not free for it, and the run fails with the holder rather than starting a worker on a device another session holds.
+    // not free for it, so the slot is dropped and the run goes on with one worker, which boots B as slot 0.
     const pair = harness({ device: undefined });
     pair.fake.respond('devices.list', () => [device('A'), device('B')]);
     pair.fake.respond('apps.open', refuse(inSession, ['A']));
-    expect(await bound(pair.prepare({ ...info, slots: 2 }))).toBe(
+    const pairLines: string[] = [];
+    const paired = await pair.prepare({ ...info, slots: 2, log: (line) => pairLines.push(line) });
+    expect(paired?.workers).toBe(1);
+    const pairEnv = paired?.env ?? {};
+    expect(pairEnv[poolVariableIn(pairEnv, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'B' }]));
+    expect(pairLines).toContain('no other booted device is free for slot 0; the run goes on with 1 worker(s)');
+    await expect(boot(pair, 'ios', 0, pairEnv)).resolves.toBeUndefined();
+    expect(pair.fake.lastArgs('devices.boot')).toMatchObject({ udid: 'B' });
+
+    // The renumbered slot warms under the dropped slot's session, so its worker resumes the session it warmed with,
+    // and each session name is closed once. A later slot that loses its device is dropped without renumbering.
+    for (const [lost, kept, warmedAs] of [
+      [['A'], [{ deviceId: 'B' }, { deviceId: 'C' }], [['e2e-ios-0', 'A'], ['e2e-ios-0', 'B'], ['e2e-ios-1', 'C']]],
+      [['B'], [{ deviceId: 'A' }, { deviceId: 'C' }], [['e2e-ios-0', 'A'], ['e2e-ios-1', 'B'], ['e2e-ios-1', 'C']]],
+      [['C'], [{ deviceId: 'A' }, { deviceId: 'B' }], [['e2e-ios-0', 'A'], ['e2e-ios-1', 'B'], ['e2e-ios-2', 'C']]],
+    ] as const) {
+      const h = pool((fake) => {
+        fake.respond('devices.list', () => free);
+        fake.respond('apps.open', refuse(inSession, lost));
+      });
+      expect(await h.prepare(3), `lost ${lost.join()}`).toBe(JSON.stringify(kept));
+      const opened = h.clients.flatMap(([session, fake]) => fake.calls.filter((call) => call.method === 'apps.open').map((call) => [session, (call.args as { udid?: string }).udid]));
+      expect(opened, `lost ${lost.join()}`).toEqual(warmedAs);
+      expect(await h.closed(), `lost ${lost.join()}`).toEqual(kept.map((_, slot) => `e2e-ios-${slot}`).concat(lost[0] === 'C' ? ['e2e-ios-2'] : []).toSorted());
+    }
+
+    // With no slot left, the run fails with the holder rather than starting a worker on a device another session holds.
+    const none = harness({ device: undefined });
+    none.fake.respond('devices.list', () => [device('A'), device('B')]);
+    none.fake.respond('apps.open', refuse(inSession, ['A', 'B']));
+    expect(await bound(none.prepare({ ...info, slots: 2 }))).toBe(
       'rejected: open Settings failed: Device is already in use by session "e2e-ios-host-other-0"; no other booted ios device is free for worker slot 0: boot another one',
     );
 

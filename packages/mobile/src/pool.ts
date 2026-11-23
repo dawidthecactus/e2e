@@ -166,25 +166,26 @@ class BootedDevices implements DeviceSource {
    * device with `refusal`. Every refused device in `taken` counts as held,
    * also when the inventory does not show the claim yet, or shows it under
    * one of this target's own session names from another project. `siblings`
-   * are the devices the run's other slots drive. With none left, the refusal
-   * is the error, with its holder, workspace and recovery advice, unless it
-   * is `passing`: a short-lived command's claim, and the slot keeps its device.
+   * are the devices the run's other slots drive. `undefined` when none is
+   * left; a failed inventory throws.
    */
-  async replace(info: EnginePrepareInfo, slot: number, taken: ReadonlySet<string>, siblings: readonly SlotBinding[], refusal: Error, passing: boolean): Promise<SlotBinding | undefined> {
+  async replace(info: EnginePrepareInfo, slot: number, taken: ReadonlySet<string>, siblings: readonly SlotBinding[]): Promise<SlotBinding | undefined> {
     const booted = await this.inventory(info, info.signal);
     const held = this.held(booted, info, taken);
     const driven = new Set(siblings.map((binding) => binding.deviceId));
     const next = booted.find((device) => !held.includes(device) && !driven.has(device.id));
-    if (next === undefined) {
-      if (passing) return undefined;
-      throw new EngineError(
-        'ENGINE_FAILURE',
-        `${refusal.message.replace(/\.$/, '')}; no other booted ${this.platform} device is free for worker slot ${slot}: boot another one`,
-        { retryable: false, cause: refusal },
-      );
-    }
+    if (next === undefined) return undefined;
     info.log(`slot ${slot} drives ${next.name} (${next.id}) instead`);
     return { deviceId: next.id };
+  }
+
+  /** The error when a slot's device was refused and no other is free: the refusal, with its holder, workspace and recovery advice. */
+  exhausted(slot: number, refusal: Error): EngineError {
+    return new EngineError(
+      'ENGINE_FAILURE',
+      `${refusal.message.replace(/\.$/, '')}; no other booted ${this.platform} device is free for worker slot ${slot}: boot another one`,
+      { retryable: false, cause: refusal },
+    );
   }
 
   /** The booted devices another session holds: claimed under a session that is not one of this target's slots, or refused by agent-device. */
@@ -221,7 +222,8 @@ class BootedDevices implements DeviceSource {
 /**
  * A discovered slot device another live agent-device session claimed between
  * the inventory and the warm-up: two hosts that prepare at once read the same
- * device as free. `prepare` moves that slot to the next free device.
+ * device as free. `prepare` moves that slot to the next free device, or drops
+ * it when none is free and other slots remain.
  */
 class TakenDevice extends Error {
   constructor(
@@ -242,7 +244,8 @@ export class DevicePool {
   /**
    * The clients `warm` opened sessions with, per target and session name, held
    * for `finish` to close whatever `warm` got to. A slot moved to another device
-   * keeps its session name, so its last client is the one closed.
+   * keeps its session name, and a later slot that takes a dropped slot's
+   * number warms under that name, so the last client of a name is the one closed.
    */
   private readonly warmed = new Map<string, Map<string, AgentDeviceClient>>();
 
@@ -327,22 +330,28 @@ export class DevicePool {
     // Only a device the pool found may move: a named device (the config's or `e2e run --device`'s) or a provider's lease is what the run asked for.
     const found = source instanceof BootedDevices ? source : undefined;
     const taken = new Set<string>();
-    for (let slot = 0; slot < bindings.length; slot++) {
-      // Each refusal adds a device `replace` never returns, so a slot runs out of devices rather than looping.
-      for (;;) {
-        try {
-          await this.warm(slot, bindings, info, found !== undefined);
-          break;
-        } catch (cause) {
-          if (!(cause instanceof TakenDevice) || found === undefined) throw cause;
-          taken.add(cause.deviceId);
-          info.log(`${cause.deviceId} is held by agent-device session "${cause.holder}"; trying the next free device`);
-          const next = await found.replace(info, slot, taken, bindings.filter((_, other) => other !== slot), cause.refusal, cause.passing);
-          if (next === undefined) {
-            info.log(`slot ${slot} keeps ${cause.deviceId}: no other booted device is free, and the worker's start finds it once the command ends`);
-            break;
-          }
+    // Each refusal adds a device `replace` never returns, so a slot runs out of devices rather than looping.
+    let slot = 0;
+    while (slot < bindings.length) {
+      try {
+        await this.warm(slot, bindings, info, found !== undefined);
+        slot++;
+      } catch (cause) {
+        if (!(cause instanceof TakenDevice) || found === undefined) throw cause;
+        taken.add(cause.deviceId);
+        info.log(`${cause.deviceId} is held by agent-device session "${cause.holder}"; trying the next free device`);
+        const next = await found.replace(info, slot, taken, bindings.filter((_, other) => other !== slot));
+        if (next !== undefined) {
           bindings[slot] = next;
+        } else if (cause.passing) {
+          info.log(`slot ${slot} keeps ${cause.deviceId}: no other booted device is free, and the worker's start finds it once the command ends`);
+          slot++;
+        } else if (bindings.length > 1) {
+          // The slots after this one have not warmed yet, so each takes the number below and warms under that session.
+          bindings.splice(slot, 1);
+          info.log(`no other booted device is free for slot ${slot}; the run goes on with ${bindings.length} worker(s)`);
+        } else {
+          throw found.exhausted(slot, cause.refusal);
         }
       }
     }
@@ -400,8 +409,9 @@ export class DevicePool {
    * the session its worker resumes. A device that cannot boot ends the run
    * here; an app that does not open is logged and left to the first attempt,
    * unless another session refused a device the pool found, which `prepare`
-   * then swaps for the next free one, or keeps when none is free and the
-   * refusal was a short-lived command's.
+   * then swaps for the next free one. With none free, it keeps the device
+   * when the refusal was a short-lived command's, else drops the slot while
+   * other slots remain.
    * An automation runner that is busy or wedged from an earlier run ends it
    * here too: the first attempt could only meet the same runner and fail
    * its first observation with the app blamed, and the message names the
