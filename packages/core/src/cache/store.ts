@@ -117,6 +117,8 @@ export class FileCacheStore implements CacheStore {
   private readonly maxBytes: number;
   /** Each pair as last read, beside the identity of its files then (`load`). */
   private readonly loaded = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
+  /** The directory as listed for a step whose test has no file under its name (`read`). */
+  private listing: Promise<ListedRecordingFile[]> | undefined;
   /** The steps read for each test, in the order they were read: where a step new to a file goes (`placeFor`). */
   private readonly readOrder = new Map<string, string[]>();
 
@@ -137,13 +139,23 @@ export class FileCacheStore implements CacheStore {
     }
     this.noteRead(step);
     const base = recordingName(step.testId);
-    return this.locked(base, async () => {
+    const own = await this.locked(base, async (): Promise<CacheReadResult | undefined> => {
       const file = await this.locate(base, step.testId);
-      if (file === undefined) return { status: 'miss' };
+      if (file === undefined) return undefined;
       // The test's own pair that does not read may hold any of its steps: none of them is a miss.
       if (file.parsed.status === 'invalid') return { status: 'invalid', reason: file.parsed.reason, bytes: file.bytes };
       return findEntry(file, keyHash) ?? { status: 'miss' };
     });
+    if (own !== undefined) return own;
+    // No file under the test's name as this step gives it. A recording made after the run learned a
+    // secret the test's id spells is named for the id redacted, which a lookup made before the run learns
+    // it (the next run's) cannot name: the key still finds it. One listing serves the attempt.
+    this.listing ??= this.list();
+    for (const file of await this.listing) {
+      const found = findEntry(file, keyHash);
+      if (found !== undefined) return found;
+    }
+    return { status: 'miss' };
   }
 
   async write(keyHash: string, payload: ActionTrace): Promise<{ bytes: number } | undefined> {

@@ -236,6 +236,15 @@ describe('FileCacheStore', () => {
     expect((await store.read(OTHER_KEY, step('ios', { testId: first }))).status).toBe('hit');
   });
 
+  it('finds a recording named for its test id redacted, from a lookup made before the run learned the secret', async () => {
+    const { store } = await makeStore();
+    const spelled = 'tests/login.e2e.ts::logs in as alice@example.com';
+    // Recorded after a provider handed the run the address as a secret: the entry keeps the id redacted.
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: 'tests/login.e2e.ts::logs in as <secret:email>' }) }));
+    expect((await store.read(KEY, step('web', { testId: spelled }))).status).toBe('hit');
+    expect((await store.read(OTHER_KEY, step('web', { testId: spelled }))).status).toBe('miss');
+  });
+
   it('names the file a test with a long id records into', async () => {
     const { directory, store } = await makeStore();
     const longId = `tests/${'component/'.repeat(460)}pay.e2e.ts::pays`;
