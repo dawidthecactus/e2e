@@ -14,8 +14,12 @@
 import { open, stat, unlink } from 'node:fs/promises';
 import { sleep } from '../internal/time.ts';
 
-/** How long a waiter retries before it gives up; the caller treats that as an unavailable store. */
-const WAIT_MS = 15_000;
+/**
+ * How long a waiter retries before it gives up; the caller treats that as
+ * an unavailable store. Longer than `STALE_MS`, so a lock a holder that
+ * just died left behind is taken over, not waited on in vain.
+ */
+const WAIT_MS = 35_000;
 /** Pause between attempts to take the lock file. */
 const RETRY_MS = 20;
 /** Age past which a lock file is a dead writer's. */
