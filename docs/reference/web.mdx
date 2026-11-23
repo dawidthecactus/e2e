@@ -1143,10 +1143,12 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
   page that registers none gives an empty list. The order is the browser's
   own and differs between Chromium and Firefox.
 - `callTool(name, input)` resolves with what the tool's `execute` resolved
-  to, usually an object with a `content` array. `input` is JSON; left out or
+  to, usually an object with a `content` array. `input` is a JSON object; left out or
   `null`, the tool gets an empty object. A result with `isError: true` comes back as it is, and
   a tool that resolves with nothing gives `null`. The result is JSON, so a
-  property the tool left `undefined` is not in it.
+  property the tool left `undefined` is not in it. Chromium hands a result
+  over as JSON text, so there a tool that resolves with a string of JSON,
+  such as `'42'`, comes back parsed.
 - A tool that sends the page to another URL ends the call before it answers.
   The call fails with `ACTION_FAILED` once the new page has loaded, and the
   message says the tool may have run. A tool still running when the time runs
@@ -1178,7 +1180,7 @@ export interface WebMcpTool {
 | --- | --- |
 | `UNSUPPORTED_CAPABILITY` | The page has no WebMCP: the browser runs without it, or the page is not a secure context. The message says which, and how to fix it. |
 | `ACTION_FAILED` | `callTool`: the page registers no tool of that name (the message lists the ones it does), the tool threw, or the call ended before the tool answered, because the page navigated or the time ran out. |
-| `INVALID_ARGUMENT` | `callTool`: `name` is not a non-empty string, `input` is not JSON, or the tool ran and resolved with something JSON cannot hold (a `Date`, a `BigInt`, `NaN`). |
+| `INVALID_ARGUMENT` | `callTool`: `name` is not a non-empty string, `input` is not a JSON object, or the tool ran and resolved with something JSON cannot hold (a `Date`, a `BigInt`, `NaN`). |
 | `INVALID_CONFIG` | `web({ webmcp: true })` with `connect`, a browser provider, or WebKit. |
 
 ## Installing browsers
@@ -1508,7 +1510,7 @@ export interface Browser extends Expectable<BrowserExpectation> {
     /** Returns the tools the page has registered now. */
     tools(): Promise<readonly WebMcpTool[]>;
     /** Calls one tool and resolves with what its `execute` resolved to. */
-    callTool(name: string, input?: JsonValue): Promise<JsonValue>;
+    callTool(name: string, input?: { readonly [key: string]: JsonValue } | null): Promise<JsonValue>;
   };
 }
 ```

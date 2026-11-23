@@ -14,10 +14,11 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { firefox } from 'playwright-core';
+import { chromium, firefox } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { EngineCleanupContext, EngineFixtureContext, EngineHandle, OperationContext } from '@e2e-dev/core/engine';
 import { web, type Browser, type BrowserName, type BrowserProvider, type WebOptions } from '../../src/index.ts';
+import { webmcpLaunch } from '../../src/webmcp.ts';
 import { closeRemoteChrome, launchRemoteChrome, type RemoteChrome } from '../helpers/cdp-host.ts';
 import { ignoreTrace, noSecrets } from '../helpers/secrets.ts';
 
@@ -250,10 +251,16 @@ describe('browser.webmcp', () => {
       await engine.session!.open!(`${origin}/`, operation());
     });
 
-    it.skipIf(!installed)('refuses a name that is not a non-empty string, and input that is not JSON', async () => {
+    it.skipIf(!installed)('refuses a name that is not a non-empty string, and input that is not a JSON object', async () => {
       await expect(browser.webmcp.callTool('')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
       await expect(browser.webmcp.callTool(7 as unknown as string)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
       await expect(browser.webmcp.callTool('add', { a: () => 1 } as never)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+      for (const [input, kind] of [[42, 'a number'], ['{}', 'a string'], [[2, 40], 'an array']] as const) {
+        await expect(browser.webmcp.callTool('add', input as never)).rejects.toMatchObject({
+          code: 'INVALID_ARGUMENT',
+          message: `browser.webmcp.callTool: input must be an object, got ${kind}`,
+        });
+      }
     });
 
     it.skipIf(!installed)('resolves with the result as JSON carries it: an undefined property is left out, and null stays', async () => {
@@ -391,6 +398,20 @@ describe('browser.webmcp', () => {
       await expect(browser.webmcp.callTool('add', { a: 2, b: 40 })).rejects.toMatchObject(expected);
     } finally {
       await shutdown(engine);
+    }
+  });
+
+  it('launches Chromium with the features Playwright itself turns on, next to WebMCP', async () => {
+    // The engine repeats Playwright's list, which Playwright does not export; this fails when a Playwright bump changes it.
+    // Chromium reports its command line only when started with `--enable-automation`.
+    const plain = await chromium.launch({ args: ['--enable-automation'] });
+    try {
+      const session = await plain.newBrowserCDPSession();
+      const { arguments: args } = (await session.send('Browser.getBrowserCommandLine')) as { arguments: string[] };
+      const features = args.find((arg) => arg.startsWith('--enable-features='))?.slice('--enable-features='.length).split(',') ?? [];
+      expect(webmcpLaunch('chromium').args).toEqual([`--enable-features=${[...features, 'WebMCP'].join(',')}`]);
+    } finally {
+      await plain.close();
     }
   });
 

@@ -928,7 +928,7 @@ expect(result).toEqual({ content: [{ type: 'text', text: '42' }] });
 - `web({ webmcp: true })` は、Chromium を `--enable-features=WebMCP` 付きで、Firefox を `dom.modelcontext` の設定付きで起動します。有効にすると、ほとんどのブラウザにまだない API がすべてのページに見えるため、デフォルトでは無効です。WebKit は WebMCP に対応していません。このオプションはエンジンが起動するブラウザ専用です。[`connect`](#connect) やプロバイダー経由のブラウザは、その引数を付けて自分で起動してください。
 - ページはセキュアコンテキスト（`https:` または `localhost`）である必要があります。そうでなければ `document.modelContext` がなく、どちらの呼び出しも `UNSUPPORTED_CAPABILITY` で失敗します。エンジンはページ自体に問い合わせるため、`connect` やプロバイダー経由のブラウザが WebMCP なしで起動されている場合も同じように失敗します。
 - `tools()` は、現在登録されているツールを返します。各ツールには `name`、`description` と、ページが指定した場合は `inputSchema`、`annotations` が含まれます。何も登録していないページでは空のリストになります。順序はブラウザ依存で、Chromium と Firefox で異なります。
-- `callTool(name, input)` は、ツールの `execute` が解決した値で解決します。通常は `content` 配列を持つオブジェクトです。`input` は JSON で、省略するか `null` を渡すと、ツールには空のオブジェクトが渡されます。`isError: true` の結果はそのまま返り、何も返さないツールでは `null` になります。結果は JSON なので、ツールが `undefined` のままにしたプロパティは含まれません。
+- `callTool(name, input)` は、ツールの `execute` が解決した値で解決します。通常は `content` 配列を持つオブジェクトです。`input` は JSON オブジェクトで、省略するか `null` を渡すと、ツールには空のオブジェクトが渡されます。`isError: true` の結果はそのまま返り、何も返さないツールでは `null` になります。結果は JSON なので、ツールが `undefined` のままにしたプロパティは含まれません。Chromium は結果を JSON テキストとして渡すため、`'42'` のような JSON の文字列で解決するツールの結果は、パースされた値になります。
 - ページを別の URL に遷移させるツールは、応答する前に呼び出しを終わらせます。呼び出しは新しいページの読み込み後に `ACTION_FAILED` で失敗し、ツールが実行された可能性があることをメッセージで伝えます。時間切れの時点でまだ実行中のツールも同じように失敗します。
 - どちらもアクティブなタブのメインフレームが対象で、その中のフレームは対象外です。
 - 名前、説明、スキーマ、結果はページ由来なので、信頼できない入力として扱ってください。
@@ -956,7 +956,7 @@ export interface WebMcpTool {
 | --- | --- |
 | `UNSUPPORTED_CAPABILITY` | ページに WebMCP がない場合。ブラウザが WebMCP なしで動作しているか、ページがセキュアコンテキストではありません。どちらであるかと対処方法はメッセージに記載されます。 |
 | `ACTION_FAILED` | `callTool`: その名前のツールをページが登録していない場合（登録済みのツールがメッセージに列挙されます）、ツールが例外を投げた場合、またはページの遷移や時間切れによってツールが応答する前に呼び出しが終わった場合。 |
-| `INVALID_ARGUMENT` | `callTool`: `name` が空でない文字列でない場合、`input` が JSON でない場合、またはツールが実行され、JSON で表せない値（`Date`、`BigInt`、`NaN`）で解決した場合。 |
+| `INVALID_ARGUMENT` | `callTool`: `name` が空でない文字列でない場合、`input` が JSON オブジェクトでない場合、またはツールが実行され、JSON で表せない値（`Date`、`BigInt`、`NaN`）で解決した場合。 |
 | `INVALID_CONFIG` | `connect`、ブラウザプロバイダー、または WebKit と `web({ webmcp: true })` を併用した場合。 |
 
 ## ブラウザのインストール
@@ -1258,7 +1258,7 @@ export interface Browser extends Expectable<BrowserExpectation> {
     /** Returns the tools the page has registered now. */
     tools(): Promise<readonly WebMcpTool[]>;
     /** Calls one tool and resolves with what its `execute` resolved to. */
-    callTool(name: string, input?: JsonValue): Promise<JsonValue>;
+    callTool(name: string, input?: { readonly [key: string]: JsonValue } | null): Promise<JsonValue>;
   };
 }
 ```

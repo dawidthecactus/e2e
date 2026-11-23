@@ -23,7 +23,7 @@ assertTrue<Equal<WebMcpTool, {
 }>>();
 assertTrue<Equal<Parameters<WebMcp['tools']>, []>>();
 assertTrue<Equal<ReturnType<WebMcp['tools']>, Promise<readonly WebMcpTool[]>>>();
-assertTrue<Equal<Parameters<WebMcp['callTool']>, [name: string, input?: JsonValue | undefined]>>();
+assertTrue<Equal<Parameters<WebMcp['callTool']>, [name: string, input?: { readonly [key: string]: JsonValue } | null | undefined]>>();
 assertTrue<Equal<ReturnType<WebMcp['callTool']>, Promise<JsonValue>>>();
 
 declare const browser: Browser;
@@ -35,6 +35,10 @@ browser.webmcp.callTool('refresh');
 browser.webmcp.callTool('refresh', null);
 // @ts-expect-error a tool name is a string
 browser.webmcp.callTool(42);
+// @ts-expect-error input is an object
+browser.webmcp.callTool('add', 42);
+// @ts-expect-error input is an object, not a list
+browser.webmcp.callTool('add', [2, 40]);
 // @ts-expect-error input is JSON, so it holds no function
 browser.webmcp.callTool('add', { a: () => 2 });
 // @ts-expect-error input is JSON, so it holds no Date

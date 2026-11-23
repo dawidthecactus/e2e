@@ -13,7 +13,7 @@ import type { Page } from 'playwright-core';
 import type { JsonValue } from '@e2e-dev/core';
 import { EngineError, TestError, validateJsonValue, type EngineFixtureContext } from '@e2e-dev/core/engine';
 import type { BrowserLaunchOptions, BrowserName } from './browser-connection.ts';
-import { isClassified, isNavigationRace, isPwTimeout, translatePwError } from './support.ts';
+import { isClassified, isNavigationRace, translatePwError } from './support.ts';
 import type { PlaywrightSurface } from './surface.ts';
 
 /** A tool a page registered through WebMCP, as the page describes it. */
@@ -38,8 +38,8 @@ export interface WebMcp {
   /** Returns the tools the page has registered now. */
   tools(): Promise<readonly WebMcpTool[]>;
   /**
-   * Calls one tool with `input` (an empty object when left out or `null`) and
-   * resolves with what its `execute` resolved to, usually an object with a
+   * Calls one tool with `input`, a JSON object (an empty one when left out or
+   * `null`), and resolves with what its `execute` resolved to, usually an object with a
    * `content` array; a result with `isError: true` comes back as it is,
    * and a tool that resolves with nothing gives `null`.
    * Rejects with `ACTION_FAILED` when the page registers no tool of that
@@ -47,7 +47,7 @@ export interface WebMcp {
    * ends before the tool answers, because the tool navigated the page or
    * the time ran out; the tool may have run then.
    */
-  callTool(name: string, input?: JsonValue): Promise<JsonValue>;
+  callTool(name: string, input?: { readonly [key: string]: JsonValue } | null): Promise<JsonValue>;
 }
 
 /** The Chromium argument that turns WebMCP on; also named in the error `browser.webmcp` gives without it. */
@@ -140,7 +140,14 @@ async function askModelContext(call: PageCall | null): Promise<PageAnswer> {
   });
   const tool = call === null ? undefined : own.find((candidate) => candidate.name === call.name);
   if (call === null || tool === undefined) return { state: 'ready', tools };
-  const messageOf = (cause: unknown): string => String(cause instanceof Error ? cause.message : cause);
+  const messageOf = (cause: unknown): string => {
+    try {
+      return String(cause instanceof Error ? cause.message : cause);
+    } catch {
+      // A thrown value with no text form, such as an object without a prototype.
+      return 'the tool threw a value that has no text';
+    }
+  };
   try {
     if (context.invokeTool !== undefined) return { state: 'ready', tools, outcome: { value: await context.invokeTool(call.name, call.input) } };
     let result: unknown;
@@ -199,8 +206,7 @@ function missingTool(label: string, name: string, tools: readonly WebMcpTool[]):
  */
 function translateUnanswered(cause: unknown, label: string, tool: string): Error {
   const unanswered = (text: string): EngineError => new EngineError('ACTION_MAY_HAVE_COMMITTED', `${label}: ${text}`, { retryable: false, cause });
-  const timedOut = isPwTimeout(cause) || (cause instanceof EngineError && cause.code === 'OPERATION_TIMEOUT');
-  if (timedOut) return unanswered(`the tool ${JSON.stringify(tool)} did not answer in time; it may have run`);
+  if (cause instanceof EngineError && cause.code === 'OPERATION_TIMEOUT') return unanswered(`the tool ${JSON.stringify(tool)} did not answer in time; it may have run`);
   if (!isClassified(cause) && isNavigationRace(cause)) return unanswered(`the page navigated before the tool ${JSON.stringify(tool)} answered; the tool may have run`);
   return translatePwError(cause, label);
 }
@@ -237,6 +243,10 @@ export function createWebMcp(surface: PlaywrightSurface, context: EngineFixtureC
         throw new TestError('INVALID_ARGUMENT', `${label}: name must be a non-empty string`);
       }
       validateJsonValue(input, `${label} input`);
+      // The browsers refuse any other input before the tool runs, each in its own words.
+      if (input !== undefined && input !== null && (typeof input !== 'object' || Array.isArray(input))) {
+        throw new TestError('INVALID_ARGUMENT', `${label}: input must be an object, got ${Array.isArray(input) ? 'an array' : `a ${typeof input}`}`);
+      }
       const call: PageCall = { name, input: input ?? {} };
       // Only a failure after the call went to the page can have run the tool; one before it is a plain failure.
       let called = false;
