@@ -70,7 +70,7 @@ export interface ScreenContext {
   readonly screenshots?: ScreenshotContext;
   /** Renders an observation as `screen.tree()` returns it: redacted, one node per line. */
   readonly renderTree: (observation: Observation) => string;
-  /** The target's query defaults, which an option on the query replaces. */
+  /** The target's query defaults. An option passed to a query takes precedence. */
   readonly locators: Readonly<Required<LocatorsConfig>>;
 }
 
@@ -177,7 +177,7 @@ class ScreenImpl implements Screen {
     return this.wrap === undefined ? expression : this.wrap(expression);
   }
 
-  /** The query's options, with the target's `locators.visible` when they set no `visible`. */
+  /** Returns the query's options, with the target's `locators.visible` when `visible` isn't set. */
   private withDefaultVisible(options: TextMatchOptions | undefined): TextMatchOptions {
     return { ...options, visible: options?.visible ?? this.context.locators.visible };
   }

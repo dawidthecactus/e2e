@@ -1,6 +1,6 @@
 /**
- * A target's `locators.visible` is the `visible` default of every query but
- * `getByRole`. A query's own `visible` replaces it.
+ * A target's `locators.visible` is the `visible` default of every query
+ * except `getByRole`. A `visible` passed to a query takes precedence.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -42,15 +42,15 @@ const QUERIES: readonly [string, (screen: Screen, options?: { visible?: boolean 
 ];
 
 describe('locators.visible', () => {
-  it.each(QUERIES)('%s skips hidden nodes when the target turns it on', async (_name, query) => {
+  it.each(QUERIES)('%s skips hidden nodes when visible is true on the target', async (_name, query) => {
     expect(await query(screenWith(true)).count()).toBe(1);
   });
 
-  it.each(QUERIES)('%s keeps hidden nodes when the query sets visible: false', async (_name, query) => {
+  it.each(QUERIES)('%s keeps hidden nodes when visible: false is passed to the query', async (_name, query) => {
     expect(await query(screenWith(true), { visible: false }).count()).toBe(2);
   });
 
-  it.each(QUERIES)('%s keeps hidden nodes by default, unless the query sets visible: true', async (_name, query) => {
+  it.each(QUERIES)('%s keeps hidden nodes by default, unless visible: true is passed to the query', async (_name, query) => {
     const screen = screenWith(false);
 
     expect(await query(screen).count()).toBe(2);

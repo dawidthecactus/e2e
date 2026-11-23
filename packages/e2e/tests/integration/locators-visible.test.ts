@@ -1,7 +1,7 @@
 /**
- * `locators.visible` from a config file, read again in each worker: the
- * top-level value makes the queries skip the fixture page's hidden nodes, and
- * a target's own value overrides it.
+ * `locators.visible` from a config file, read again in each worker. With the
+ * top-level value, the fixture page's hidden nodes are skipped. A target's
+ * value takes precedence over it.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

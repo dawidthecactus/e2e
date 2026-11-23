@@ -23,7 +23,7 @@ describe('locateQuery', () => {
     expect(locateQuery({ testId: 'items' }).code).toBe('screen.getByTestId("items")');
   });
 
-  it("matches only visible nodes under the target's visible default, with the same screen call a test writes", () => {
+  it("matches only visible nodes under the target's visible default, with the same screen call as in a test", () => {
     for (const args of [{ text: 'Save' }, { label: 'Email' }, { placeholder: 'you@example.test' }, { testId: 'items' }]) {
       const query = locateQuery(args, true);
       expect(query.expression).toMatchObject({ query: { visible: true } });

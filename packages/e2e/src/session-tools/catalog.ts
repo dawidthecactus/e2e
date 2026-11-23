@@ -83,7 +83,7 @@ export interface CatalogOptions {
   readonly onActionFailed?: ((cause: unknown) => void) | undefined;
   /** The attempt's fixtures and what guards them, for `run_code`; without them the catalog has no `run_code`. */
   readonly runCode?: RunCodeSession | undefined;
-  /** The target's query defaults, which `locate`, test lines, and `run_code` apply as a test does. */
+  /** The target's query defaults, used by `locate`, test lines, and `run_code` as in a test. */
   readonly locators: ResolvedTarget['locators'];
 }
 
@@ -230,8 +230,8 @@ export interface LocateQuery {
 
 /**
  * Builds the expression and the matching `screen.*` call from the tool
- * arguments. `visible` is the target's `locators.visible`, which the call
- * leaves out, as a test's query takes it from the config.
+ * arguments. `visible` is the target's `locators.visible`. It's left out of
+ * the call, since in a test it comes from the config.
  */
 export function locateQuery(args: LocateArgs, visible = false): LocateQuery {
   const exact = args.exact !== false;

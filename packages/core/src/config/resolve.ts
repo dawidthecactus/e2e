@@ -689,7 +689,7 @@ function targetRecording(run: RunRecording, own: unknown, where: string, kind: R
   return { mode: run.fallback, source: 'default' };
 }
 
-/** The `visible` default a `locators` object sets, checked; undefined when it sets none. */
+/** Checks a `locators` object and returns its `visible`, or undefined when it isn't set. */
 function locatorsVisible(value: unknown, where: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (!isPlainObject(value)) {
@@ -1026,8 +1026,9 @@ function computeConfigDigest(
   // one leaves the replays valid, like a reporter.
   // `targets` digest by declaration below and never enter the clone: an
   // engine holds `secrets.get()` handles, which refuse to serialize.
-  // `locators` enters through them, resolved per target, so one default
-  // digests alike wherever it is written.
+  // The top-level `locators` is left out of the clone. It's digested with
+  // each resolved target instead, so a default gives the same digest
+  // whether it's set on the config or on a target.
   const {
     failOnSkippedFailure: _failOnSkippedFailure,
     maxDuration: _maxDuration,

@@ -69,7 +69,7 @@ interface RunCodeOptions extends RunCodeSession {
   readonly screen: Pick<ScreenPresenter, 'update'>;
   /** Told the source of every statement that passed and is not a read, in the order they ran, for `test_lines`. */
   readonly record?: ((passed: readonly string[]) => void) | undefined;
-  /** The target's query defaults, which the session's screen applies as a test's does. */
+  /** The target's query defaults, used by the session's screen as in a test. */
   readonly locators: ResolvedTarget['locators'];
 }
 

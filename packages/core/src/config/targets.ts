@@ -34,7 +34,7 @@ export interface ResolvedTarget {
   readonly trace: ResolvedRecording;
   /** Which attempts on the target record a video: `--video`, else the target's `video`, else the config's, else `off`. A test's own `video` wins over it. */
   readonly video: ResolvedRecording;
-  /** Defaults for the target's screen queries: the target's `locators`, else the config's, else `visible: false`. */
+  /** Defaults for the target's screen queries. They come from the target's `locators`, else the config's, else `visible: false`. */
   readonly locators: Readonly<Required<LocatorsConfig>>;
 }
 
@@ -43,9 +43,9 @@ export const TARGET_NAME_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]+$/;
 
 /**
  * Resolves `targets`: each target's name, platform, engine, recordings,
- * locator defaults, and app, without the run's ports. An engine in this process is served over
- * the engine protocol, so each call crosses the wire format a remote engine
- * would receive.
+ * locator defaults, and app, without the run's ports. An engine in this
+ * process is served over the engine protocol, so each call crosses the wire
+ * format a remote engine would receive.
  */
 export function resolveTargets(
   declared: unknown,
@@ -136,9 +136,9 @@ export function launchesPinnedApp(target: ResolvedTarget): boolean {
  * contract version, the platform it drives (a named target inherits it, so
  * two workers whose engines declare different platforms must not agree on
  * the digest), and capability set. The app enters as declared, env values
- * reduced to their names and the run's port never. The locator defaults
- * enter only when they turn `visible` on, so a config without them keeps its
- * digest.
+ * reduced to their names and the run's port never. The locator defaults are
+ * digested only when `visible` is true, so the digest of a config that
+ * doesn't set them doesn't change.
  */
 export function digestTargets(targets: readonly ResolvedTarget[]) {
   return targets.map(({ name, platform, engine, declaredApp, locators }) => ({

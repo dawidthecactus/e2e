@@ -294,14 +294,15 @@ substring; a `RegExp` matches as written.
   identical literal frame-selector chains; display-value branches cannot be
   composed.
 - `visible: true` drops nodes the page hides (a closed drawer) before the
-  exactly-one rule. `locators: { visible: true }` in the config, or on a
-  target, makes it the default of every query but `getByRole`, which never
-  matches a hidden node; `{ visible: false }` on a query keeps hidden
-  nodes. Visibility is what renders, as `toBeVisible()` reads it:
+  exactly-one rule. Visibility is what renders, as `toBeVisible()` reads it:
   an `aria-hidden` spinner that paints is visible, so `toBeHidden()` waits
   for it to go. A closed `<details>` body and content under
   `content-visibility: hidden` are hidden through shadow roots and slots too,
   unless the page's CSS still shows them.
+- To make `visible: true` the default of every query except `getByRole`
+  (which never matches a hidden node), set `locators: { visible: true }` in
+  the config or on a target. Hidden nodes are still kept with
+  `{ visible: false }` on a query.
 - On the web, queries reach open shadow roots and closed roots attached with
   `attachShadow`, not declarative closed roots. `browser.locator(css)`,
   `frameLocator`, and `filter({ hasText })` stop at a closed root; query the

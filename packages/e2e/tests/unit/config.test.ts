@@ -1259,14 +1259,14 @@ describe('resolveConfig', () => {
   describe('locators', () => {
     const visibleOf = (raw: Partial<E2EConfig>) => resolve(raw).targets.map((target) => target.locators.visible);
 
-    it('keeps hidden matches unless the config or a target turns visible on', () => {
+    it('keeps hidden matches unless visible is true in the config or on a target', () => {
       expect(visibleOf({})).toEqual([false]);
       expect(visibleOf({ locators: {} })).toEqual([false]);
       expect(visibleOf({ locators: { visible: true } })).toEqual([true]);
       expect(visibleOf({ targets: [{ ...WEB, locators: { visible: true } }] })).toEqual([true]);
     });
 
-    it('lets a target override the config', () => {
+    it("uses a target's visible over the config's", () => {
       const targets = [
         { name: 'inherits', platform: 'web' },
         { name: 'own', platform: 'web', locators: { visible: false } },
@@ -1275,7 +1275,7 @@ describe('resolveConfig', () => {
       expect(visibleOf({ targets, locators: { visible: true } })).toEqual([true, false, true]);
     });
 
-    it('changes the digest only when it turns visible on, wherever it is set', () => {
+    it('changes the digest only when visible is true, wherever it is set', () => {
       const plain = resolve({}).configDigest;
       expect(resolve({ locators: {} }).configDigest).toBe(plain);
       expect(resolve({ locators: { visible: false } }).configDigest).toBe(plain);
@@ -1285,7 +1285,7 @@ describe('resolveConfig', () => {
       expect(resolve({ targets: [{ ...WEB, locators: { visible: true } }] }).configDigest).toBe(visible);
     });
 
-    it('refuses a value that is not an object with a boolean visible, wherever it is set', () => {
+    it("refuses a value that isn't an object with a boolean visible, wherever it is set", () => {
       const failure = (raw: unknown): unknown => {
         try {
           resolve(invalid(raw));

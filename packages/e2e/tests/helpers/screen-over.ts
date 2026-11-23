@@ -42,7 +42,7 @@ export interface ScreenOverOptions {
   readonly tapModifiers?: boolean;
   /** Action and assertion timeout in milliseconds. */
   readonly timeoutMs: number;
-  /** The target's query defaults; default `visible: false`. */
+  /** The target's query defaults (`visible: false` if unset). */
   readonly locators?: ScreenContext['locators'];
 }
 

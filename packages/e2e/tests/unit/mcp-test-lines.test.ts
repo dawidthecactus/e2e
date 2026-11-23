@@ -73,7 +73,7 @@ async function harness(options: {
   readonly actions?: Partial<ExecutorActions>;
   readonly tree?: boolean;
   readonly testRan?: string;
-  /** The target's `locators.visible`; default false. */
+  /** The target's `locators.visible` (false if unset). */
   readonly visible?: boolean;
 }): Promise<Harness> {
   const root: Fake = { id: 'root', role: 'document', name: 'Page', y: 0, children: options.screen };
@@ -220,7 +220,7 @@ describe('SessionTestLines', () => {
     expect(noteOf(await session.run('tap', { target: 'n6' }))).toBe('Test line: await screen.getByText("Sale", { visible: true }).tap();');
   });
 
-  it("counts only the nodes that render under the target's visible default, and writes no option for it", async () => {
+  it("counts only the nodes that render under the target's visible default, and doesn't write an option for it", async () => {
     const hidden: Fake = { id: 'n5', text: 'Sale', y: 500 };
     const sale: Fake = { id: 'n6', text: 'Sale', y: 120 };
     const unique = await harness({ visible: true, screen: [hidden, sale], matches: { 'getByText("Sale", visible: true)': [sale] } });

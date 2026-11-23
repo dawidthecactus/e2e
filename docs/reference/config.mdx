@@ -286,22 +286,22 @@ An id is its factory called with no options. An unknown id is
 
 #### `locators`
 
-Defaults for screen queries. `visible: true` makes `getByText`, `getByLabel`,
-`getByPlaceholder`, `getByDisplayValue`, and `getByTestId` skip hidden nodes,
-as if each query passed `{ visible: true }`. `getByRole` never matches a
-hidden node.
+Defaults for screen queries. With `visible: true`, hidden nodes are skipped
+by `getByText`, `getByLabel`, `getByPlaceholder`, `getByDisplayValue`, and
+`getByTestId`, as if `{ visible: true }` were passed to each query.
+`getByRole` never matches a hidden node.
 
 ```ts
 locators: { visible: true }, // default: { visible: false }
 ```
 
-- A target's `locators: { visible: false }` turns it off for that target.
-  A target with no `visible` of its own takes the config's.
-- A query's own `visible` wins over both:
-  `screen.getByText('Saved', { visible: false })` keeps hidden matches.
-- `run_code`, `locate`, and the test lines of an
-  [`e2e mcp`](/reference/mcp) session apply it too.
-- A value that is not an object, a `visible` that is not a boolean, or an
+- A `locators.visible` set on a target is used in place of the config's for
+  that target. Without one, the config's value is used.
+- A `visible` passed to a query takes precedence over both, so hidden
+  matches are kept with `screen.getByText('Saved', { visible: false })`.
+- The same default is used by `run_code`, `locate`, and the test lines of an
+  [`e2e mcp`](/reference/mcp) session.
+- A value that isn't an object, a `visible` that isn't a boolean, or an
   unknown key is `INVALID_CONFIG`.
 - See [Hidden duplicates](/reference/screen#hidden-duplicates).
 
@@ -1657,7 +1657,7 @@ export interface E2EConfig {
   trace?: RecordingMode;
   /** Which attempts record a video; default `off`. */
   video?: RecordingMode;
-  /** Defaults for screen queries on every target; a target's `locators` wins over it. */
+  /** Defaults for screen queries on every target. A target's `locators.visible` takes precedence over it. */
   locators?: LocatorsConfig;
   /** The results directory, relative to the project root; default `.e2e`. */
   output?: string;
@@ -1696,7 +1696,7 @@ export interface Target {
   trace?: RecordingMode;
   /** Which attempts on this target record a video, in place of the config's `video`. */
   video?: RecordingMode;
-  /** Defaults for this target's screen queries; a `visible` set here wins over the config's. */
+  /** Defaults for this target's screen queries. A `visible` set here takes precedence over the config's. */
   locators?: LocatorsConfig;
 }
 ```
@@ -1704,9 +1704,12 @@ export interface Target {
 ### `LocatorsConfig`
 
 ```ts
-/** Defaults for screen queries, which an option on the query itself replaces. */
+/** Defaults for screen queries. An option passed to a query takes precedence. */
 export interface LocatorsConfig {
-  /** The `visible` option of every query but `getByRole`; default false. */
+  /**
+   * The default `visible` option of every query except `getByRole` (false if
+   * unset). Set it to true when most queries need `{ visible: true }`.
+   */
   visible?: boolean;
 }
 ```
