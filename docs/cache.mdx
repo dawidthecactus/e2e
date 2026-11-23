@@ -300,8 +300,11 @@ no field declares a purpose, as no field does on iOS and Android.
 ## What a recording holds
 
 Each test's recordings are one YAML file under `.e2e/cache/`, named for the
-test. Each step sits under its instruction, then under each target it was
-recorded on:
+test's file stem and titles. When two tests come out with the same name
+(`login.e2e.ts` in two folders, with the same titles), the one that records
+second gets the name with `--` and a hash of its test id after it, so which
+test gets which name depends on the order they first recorded in. Each step
+sits under its instruction, then under each target it was recorded on:
 
 ```yaml title=".e2e/cache/login-form-signs-in.yml"
 test: signs in
