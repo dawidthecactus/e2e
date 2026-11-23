@@ -16,7 +16,7 @@ import { readdir, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
 import picocolors from 'picocolors';
-import { FileCacheStore, LOCK_EXTENSION, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION, recordingStem } from '@e2e-dev/core/lib/cache/store';
+import { FileCacheStore, LOCK_EXTENSION, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION } from '@e2e-dev/core/lib/cache/store';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig } from '../config/resolve-run.ts';
 import { errorMessage } from '@e2e-dev/core/lib/internal/errors';
@@ -189,12 +189,15 @@ async function readContents(directory: string): Promise<CacheContents> {
     }
     throw cause;
   }
+  const listedFiles = await store.list();
+  // A file named like a recording is the store's only when the store lists it: one it never wrote stays foreign.
+  const owned = new Set(listedFiles.flatMap((listed) => [`${listed.name}${RECORDING_EXTENSION}`, `${listed.name}${LOCK_EXTENSION}`]));
   for (const name of names.toSorted()) {
     if (LEGACY_ENTRY_FILE.test(name)) legacy.push(name);
-    else if (recordingStem(name) === undefined && !TEMPORARY_FILE.test(name)) foreign.push(name);
+    else if (!owned.has(name) && !TEMPORARY_FILE.test(name)) foreign.push(name);
   }
 
-  for (const listed of await store.list()) {
+  for (const listed of listedFiles) {
     const file = `${listed.name}${RECORDING_EXTENSION}`;
     files.push({ name: listed.name, bytes: listed.bytes });
     const { parsed } = listed;

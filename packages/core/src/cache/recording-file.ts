@@ -44,6 +44,22 @@ import { readTraceEntry } from './trace-read.ts';
 /** The `format` every lock file this runner writes names, and the only one it reads. */
 export const RECORDING_LOCK_FORMAT = 'e2e-replay-lock-1';
 
+/** How every YAML this runner writes opens: its header comment's first words. */
+const RECORDING_HEADER = '# Replay recording of one e2e test.';
+
+/** The lock's `format` line, matched as text so that a lock JSON cannot parse (a merge conflict) still shows it. */
+const LOCK_FORMAT_FIELD = new RegExp(`"format"\\s*:\\s*"${RECORDING_LOCK_FORMAT}"`, 'u');
+
+/**
+ * Whether a pair's files say this runner wrote them, from the start of each:
+ * the YAML opens with the header comment, or the lock names the format. A
+ * file with neither is someone else's, whatever its name, and the store
+ * neither reads nor deletes it.
+ */
+export function writtenByStore(yamlHead: string | undefined, lockHead: string | undefined): boolean {
+  return yamlHead?.startsWith(RECORDING_HEADER) === true || (lockHead !== undefined && LOCK_FORMAT_FIELD.test(lockHead));
+}
+
 /** The name every configured agent has unless a test names another; the YAML shows any other. */
 const DEFAULT_AGENT = 'default';
 
@@ -173,7 +189,7 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
     steps,
   }) as typeof doc.contents;
   doc.commentBefore = [
-    ' Replay recording of one e2e test. Review it like code: each step lists what',
+    `${RECORDING_HEADER.slice(1)} Review it like code: each step lists what`,
     ' a replay does (do) and what it checks before the step passes (expect).',
     ` Generated, not reviewed: ${lockName} holds the cache keys.`,
   ].join('\n');

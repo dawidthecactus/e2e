@@ -18,13 +18,20 @@
  * replace the filesystem without the harness noticing.
  */
 
-import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../internal/atomic-write.ts';
 import { errorMessage } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
 import { withFileLock } from './file-lock.ts';
-import { parseRecordingFile, renderRecordingFile, stepIdentity, type ParsedRecordingFile, type StoredRecording } from './recording-file.ts';
+import {
+  parseRecordingFile,
+  renderRecordingFile,
+  stepIdentity,
+  writtenByStore,
+  type ParsedRecordingFile,
+  type StoredRecording,
+} from './recording-file.ts';
 import { collisionName, RECORDING_NAME, recordingName } from './recording-name.ts';
 import { MAX_TRACE_END_WAIT_MS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
 
@@ -32,6 +39,9 @@ import { MAX_TRACE_END_WAIT_MS, type ActionTrace, type TraceEntry, type TracePro
 export const MAX_CACHE_WIRE_BYTES = 1_048_576;
 
 const KEY_HASH = /^[a-f0-9]{64}$/u;
+
+/** How much of a file over the size cap is read to tell whose it is (`writtenByStore`). */
+const HEAD_BYTES = 4_096;
 
 /** The reviewed file's extension. */
 export const RECORDING_EXTENSION = '.yml';
@@ -82,7 +92,7 @@ export interface ListedRecordingFile {
   readonly parsed: ParsedRecordingFile;
 }
 
-/** A pair read from disk: its name, size, and what it holds; undefined when neither file exists. */
+/** A pair read from disk: its name, size, and what it holds; undefined when neither file exists or neither is the store's. */
 type LoadedFile = ListedRecordingFile;
 
 export class FileCacheStore implements CacheStore {
@@ -214,11 +224,16 @@ export class FileCacheStore implements CacheStore {
     return (await present(this.path(name, RECORDING_EXTENSION))) || (await present(this.path(name, LOCK_EXTENSION)));
   }
 
-  /** Reads one pair, refusing a file over the size cap before reading it. */
+  /**
+   * Reads one pair, refusing a file over the size cap before reading all of
+   * it. A name the store would write can still be another tool's file
+   * (`cache.dir` can point anywhere), so a pair neither of whose files says
+   * the store wrote it is not one.
+   */
   private async load(name: string): Promise<LoadedFile | undefined> {
     const yaml = await this.readCapped(this.path(name, RECORDING_EXTENSION));
     const lock = await this.readCapped(this.path(name, LOCK_EXTENSION));
-    if (yaml === undefined && lock === undefined) return undefined;
+    if (!writtenByStore(yaml?.head, lock?.head)) return undefined;
     const bytes = (yaml?.bytes ?? 0) + (lock?.bytes ?? 0);
     const problem = yaml?.problem ?? lock?.problem;
     if (problem !== undefined || yaml?.text === undefined || lock?.text === undefined) {
@@ -245,16 +260,22 @@ export class FileCacheStore implements CacheStore {
     };
   }
 
-  private async readCapped(path: string): Promise<{ readonly bytes: number; readonly text?: string; readonly problem?: string } | undefined> {
+  /** One file of a pair: its whole text, or its first bytes and why the rest was not read; undefined when absent. */
+  private async readCapped(
+    path: string,
+  ): Promise<{ readonly bytes: number; readonly text?: string; readonly head?: string; readonly problem?: string } | undefined> {
     let bytes: number;
     try {
       bytes = (await stat(path)).size;
     } catch {
       return undefined;
     }
-    if (bytes > this.maxBytes) return { bytes, problem: `${path} is ${bytes} bytes, over the ${this.maxBytes}-byte limit` };
     try {
-      return { bytes, text: await readFile(path, 'utf8') };
+      if (bytes > this.maxBytes) {
+        return { bytes, head: await readHead(path), problem: `${path} is ${bytes} bytes, over the ${this.maxBytes}-byte limit` };
+      }
+      const text = await readFile(path, 'utf8');
+      return { bytes, text, head: text };
     } catch (cause) {
       return { bytes, problem: `${path} is unreadable: ${errorMessage(cause)}` };
     }
@@ -306,13 +327,25 @@ export async function recordingFileName(directory: string, testId: string): Prom
 }
 
 /** The name a store file carries before its extension, or undefined for any other file. */
-export function recordingStem(fileName: string): string | undefined {
+function recordingStem(fileName: string): string | undefined {
   const stem = fileName.endsWith(LOCK_EXTENSION)
     ? fileName.slice(0, -LOCK_EXTENSION.length)
     : fileName.endsWith(RECORDING_EXTENSION)
       ? fileName.slice(0, -RECORDING_EXTENSION.length)
       : undefined;
   return stem !== undefined && RECORDING_NAME.test(stem) ? stem : undefined;
+}
+
+/** The first `HEAD_BYTES` of a file, as text. */
+async function readHead(path: string): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, HEAD_BYTES, 0);
+    return buffer.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    await handle.close();
+  }
 }
 
 /** One key's entry in a pair, as a read result; undefined when the pair does not hold the key. */

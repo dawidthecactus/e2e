@@ -206,7 +206,7 @@ describe('e2e cache clear', () => {
   it('removes an unreadable recording, an older e2e\u2019s entry, and a crashed writer\u2019s leftovers', async () => {
     const directory = path.join(root, CACHE_DIR);
     mkdirSync(directory, { recursive: true });
-    writeFileSync(path.join(directory, 'a-torn.yml'), 'torn', 'utf8');
+    writeFileSync(path.join(directory, 'a-torn.yml'), '# Replay recording of one e2e test. Review it\nsteps: [ torn', 'utf8');
     writeFileSync(path.join(directory, `${'c'.repeat(64)}.json`), 'torn', 'utf8');
     writeFileSync(path.join(directory, 'a-torn.yml.0123456789abcdef.tmp'), '{}', 'utf8');
     writeFileSync(path.join(directory, '.a-torn.writing'), '', 'utf8');
@@ -219,9 +219,13 @@ describe('e2e cache clear', () => {
     const directory = path.join(root, CACHE_DIR);
     mkdirSync(directory, { recursive: true });
     writeFileSync(path.join(directory, 'notes.md'), 'keep me', 'utf8');
+    // Named like recordings, but nothing in them says the runner wrote them.
+    writeFileSync(path.join(directory, 'ci.yml'), 'on: push\n', 'utf8');
+    writeFileSync(path.join(directory, 'tool.lock.json'), '{"version": 1}\n', 'utf8');
     await invoke('cache', 'clear');
     expect(written(stderrSpy)).toContain('notes.md');
-    expect(readdirSync(directory)).toEqual(['notes.md']);
+    expect(written(stderrSpy)).toContain('ci.yml');
+    expect(readdirSync(directory).toSorted()).toEqual(['ci.yml', 'notes.md', 'tool.lock.json']);
   });
 
   it('has nothing to clear when the store was never written', async () => {
