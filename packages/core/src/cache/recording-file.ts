@@ -169,10 +169,11 @@ export async function renderRecordingFile(file: RecordingFile, lockName: string)
 
   const steps = groups.map((group, stepIndex) => {
     const step = group.recordings[0]!.trace.recordedFor!;
-    const targets: Record<string, unknown> = {};
+    // A map, not an object: a target may be named `__proto__`.
+    const targets = new Map<string, unknown>();
     for (const recording of group.recordings) {
       const { trace } = recording;
-      targets[trace.recordedFor!.targetId] = renderVariant(trace, flow);
+      targets.set(trace.recordedFor!.targetId, renderVariant(trace, flow));
       lockEntries.push(lockEntry(recording, stepIndex, step.instruction, step.params));
     }
     return {

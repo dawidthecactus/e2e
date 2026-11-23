@@ -179,6 +179,12 @@ describe('FileCacheStore', () => {
     expect((await store.read(KEY, deepStep)).status).toBe('hit');
   });
 
+  it('writes a target whatever its name', async () => {
+    const { store } = await makeStore();
+    await store.write(KEY, payload('__proto__'));
+    expect((await store.read(KEY, step('__proto__'))).status).toBe('hit');
+  });
+
   it('names an agent other than the default on its step', async () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload('web', { recordedFor: step('web', { agent: 'admin' }) }));
