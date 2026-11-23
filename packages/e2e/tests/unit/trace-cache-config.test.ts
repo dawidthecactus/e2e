@@ -361,6 +361,15 @@ describe('settleStagedTraces', () => {
     expect(readTraceEntry(JSON.parse(store.entries.get(KEY_A)!))?.payload).toEqual({ ...recorded, recordedFor: STEP });
   });
 
+  it('keeps a number in the params as redacted text when its digits are a secret', () => {
+    const ledger = new SecretLedger();
+    ledger.register('pin', '246810');
+    const recordedFor = recordedProvenance({ ...STEP, params: { pin: 246810, count: 3, nested: [246810] } }, (text) => ledger.redact(text));
+    expect(JSON.stringify(recordedFor.params)).not.toContain('246810');
+    expect(recordedFor.params).toMatchObject({ count: 3 });
+    expect(typeof recordedFor.params?.['pin']).toBe('string');
+  });
+
   it('writes the identity digest into a confirmed kept entry that cut a long test id before entries kept one', async () => {
     const store = memoryStore();
     const long = { ...STEP, testId: `${STEP.testId}${'x'.repeat(400)}` };

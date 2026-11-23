@@ -387,9 +387,11 @@ export function recordedProvenance(provenance: TraceProvenance, redact: (text: s
 }
 
 /**
- * Params as an entry stores them: every string redacted, and none at all
- * when there are none or their canonical JSON is longer than an entry keeps.
- * Display only, like the instruction, so a cut would only mislead.
+ * Params as an entry stores them: every string redacted, a number whose
+ * digits are a secret's value replaced by the redacted text (a PIN passed
+ * as `246810`), and none at all when there are none or their canonical
+ * JSON is longer than an entry keeps. Display only, like the instruction,
+ * so a cut would only mislead.
  */
 function recordedParams(
   params: Readonly<Record<string, JsonValue>> | undefined,
@@ -398,6 +400,10 @@ function recordedParams(
   if (params === undefined || Object.keys(params).length === 0) return {};
   const walk = (value: JsonValue): JsonValue => {
     if (typeof value === 'string') return redact(value);
+    if (typeof value === 'number') {
+      const redacted = redact(JSON.stringify(value));
+      return redacted === JSON.stringify(value) ? value : redacted;
+    }
     if (value === null || typeof value !== 'object') return value;
     if (Array.isArray(value)) return value.map(walk);
     return Object.fromEntries(Object.entries(value as Readonly<Record<string, JsonValue>>).map(([key, item]) => [redact(key), walk(item)]));
