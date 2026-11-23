@@ -776,6 +776,19 @@ export async function parseRecordingFile(yamlText: string, lockText: string): Pr
 }
 
 /**
+ * A lock whose YAML is gone: nothing anyone reviewed is left, so the pair
+ * holds no recordings, as a YAML with every step deleted holds none, and a
+ * write may replace it. Invalid when the lock itself does not read.
+ */
+export function parseLockAlone(lockText: string): ParsedRecordingFile {
+  try {
+    return { status: 'ok', testId: readLock(lockText).testId, recordings: [], unclaimed: [] };
+  } catch (cause) {
+    return { status: 'invalid', keyHashes: [], reason: errorText(cause) };
+  }
+}
+
+/**
  * Whether a YAML is the named test's, by its `test` and `file`: for a pair
  * whose lock cannot say whose it is. Undefined when the YAML does not read
  * far enough to tell.

@@ -454,6 +454,15 @@ describe('FileCacheStore', () => {
     });
   });
 
+  it('reads a lock whose YAML was deleted as holding nothing, and records over it', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    await rm(yamlPath(directory));
+    expect((await store.read(KEY, step())).status).toBe('miss');
+    expect(await store.write(KEY, payload())).toBeDefined();
+    expect((await store.read(KEY, step())).status).toBe('hit');
+  });
+
   it('keeps a recording it cannot read when another is written or evicted beside it', async () => {
     const { directory, store } = await makeStore();
     const second = step('web', { callIndex: 1 });

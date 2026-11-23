@@ -29,6 +29,7 @@ import { timestamp } from '../internal/ids.ts';
 import { bound } from '../internal/text.ts';
 import { withFileLock } from './file-lock.ts';
 import {
+  parseLockAlone,
   parseRecordingFile,
   recordingNamesTest,
   renderRecordingFile,
@@ -311,6 +312,10 @@ export class FileCacheStore implements CacheStore {
     ];
     const bytes = (yaml?.bytes ?? 0) + (lock?.bytes ?? 0);
     const problem = yaml?.problem ?? lock?.problem;
+    if (problem === undefined && yaml === undefined && lock?.text !== undefined) {
+      const parsed = parseLockAlone(lock.text);
+      return { name, bytes, files, parsed: parsed.status === 'invalid' ? { ...parsed, reason: `${name}${LOCK_EXTENSION}: ${parsed.reason}` } : parsed };
+    }
     if (problem !== undefined || yaml?.text === undefined || lock?.text === undefined) {
       // The lock may still say whose pair this is, so a writer for that test replaces it.
       const parsedLock = lock?.text === undefined ? undefined : await parseRecordingFile('', lock.text);
