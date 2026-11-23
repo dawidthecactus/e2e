@@ -37,6 +37,7 @@ import {
   type RecordedAction,
   type TraceEntry,
   type TracePointEnd,
+  type TraceProvenance,
   type TraceTargetDescriptor,
 } from './trace.ts';
 import { readTraceEntry } from './trace-read.ts';
@@ -110,8 +111,7 @@ export type ParsedRecordingFile =
  * same request (instruction and params), the same occurrence of it, by the
  * same agent. Recordings of one step on two targets sit side by side.
  */
-export function stepIdentity(trace: ActionTrace): string | undefined {
-  const step = trace.recordedFor;
+export function stepIdentity(step: TraceProvenance | undefined): string | undefined {
   if (step?.paramsDigest === undefined || step.callIndex === undefined || step.agent === undefined) return undefined;
   return JSON.stringify([step.instructionDigest, step.paramsDigest, step.callIndex, step.agent, step.identityDigest ?? null]);
 }
@@ -145,7 +145,7 @@ interface StepGroup {
 function groupSteps(recordings: readonly StoredRecording[]): StepGroup[] {
   const groups = new Map<string, StepGroup>();
   for (const recording of recordings) {
-    const identity = stepIdentity(recording.trace)!;
+    const identity = stepIdentity(recording.trace.recordedFor)!;
     const group = groups.get(identity) ?? { identity, recordings: [] };
     group.recordings.push(recording);
     groups.set(identity, group);

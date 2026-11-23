@@ -105,6 +105,8 @@ export class FileCacheStore implements CacheStore {
 
   private readonly directory: string;
   private readonly maxBytes: number;
+  /** The steps read for each test, in the order they were read: where a step new to a file goes (`placeFor`). */
+  private readonly readOrder = new Map<string, string[]>();
 
   constructor(options: FileCacheStoreOptions) {
     this.directory = options.directory;
@@ -121,6 +123,7 @@ export class FileCacheStore implements CacheStore {
       }
       return { status: 'miss' };
     }
+    this.noteRead(step);
     const base = recordingName(step.testId);
     return this.locked(base, async () => {
       const file = await this.locate(base, step.testId);
@@ -134,7 +137,7 @@ export class FileCacheStore implements CacheStore {
   async write(keyHash: string, payload: ActionTrace): Promise<{ bytes: number } | undefined> {
     if (!this.writable || !KEY_HASH.test(keyHash)) return undefined;
     const testId = payload.recordedFor?.testId;
-    const slot = stepIdentity(payload);
+    const slot = stepIdentity(payload.recordedFor);
     if (testId === undefined || slot === undefined) return undefined;
     const base = recordingName(testId);
     return this.locked(base, async () => {
@@ -144,7 +147,7 @@ export class FileCacheStore implements CacheStore {
       const name = file?.name ?? (await this.exists(base) ? collisionName(base, testId) : base);
       const recordings = file?.parsed.status === 'ok' ? hits(file.parsed) : [];
       const sameSlot = (recording: StoredRecording) =>
-        stepIdentity(recording.trace) === slot && recording.trace.recordedFor?.targetId === payload.recordedFor!.targetId;
+        stepIdentity(recording.trace.recordedFor) === slot && recording.trace.recordedFor?.targetId === payload.recordedFor!.targetId;
       const replaced = recordings.find((recording) => recording.keyHash === keyHash || sameSlot(recording));
       const recording: StoredRecording = {
         keyHash,
@@ -154,8 +157,8 @@ export class FileCacheStore implements CacheStore {
       };
       const index = replaced === undefined ? -1 : recordings.indexOf(replaced);
       const next = recordings.filter((existing) => existing.keyHash !== keyHash && !sameSlot(existing));
-      if (index < 0) next.push(recording);
-      else next.splice(Math.min(index, next.length), 0, recording);
+      if (index >= 0) next.splice(Math.min(index, next.length), 0, recording);
+      else next.splice(this.placeFor(testId, slot, next), 0, recording);
       return this.save(name, testId, next);
     }, true);
   }
@@ -202,6 +205,31 @@ export class FileCacheStore implements CacheStore {
       if (file !== undefined) files.push(file);
     }
     return files;
+  }
+
+  private noteRead(step: TraceProvenance): void {
+    const identity = stepIdentity(step);
+    if (identity === undefined) return;
+    const order = this.readOrder.get(step.testId) ?? [];
+    if (!order.includes(identity)) order.push(identity);
+    this.readOrder.set(step.testId, order);
+  }
+
+  /**
+   * Where a recording goes among a test's `recordings` when its step has
+   * none there yet: before the first recording of a step read after it, so
+   * a step added to the middle of a test lands in the middle of its file.
+   * At the end when the step was not read through this store (a retry
+   * records without reading) or no later step is in the file.
+   */
+  private placeFor(testId: string, identity: string, recordings: readonly StoredRecording[]): number {
+    if (recordings.some((recording) => stepIdentity(recording.trace.recordedFor) === identity)) return recordings.length;
+    const order = this.readOrder.get(testId) ?? [];
+    const at = order.indexOf(identity);
+    if (at < 0) return recordings.length;
+    const later = new Set(order.slice(at + 1));
+    const index = recordings.findIndex((recording) => later.has(stepIdentity(recording.trace.recordedFor)!));
+    return index < 0 ? recordings.length : index;
   }
 
   /**

@@ -196,6 +196,20 @@ describe('FileCacheStore', () => {
     expect(await recordingFileName(directory, longId)).toBe(written);
   });
 
+  it('puts a step added to the middle of a test in the middle of its file', async () => {
+    const { directory, store } = await makeStore();
+    const named = (instruction: string) => step('web', { instruction, instructionDigest: instructionDigest(instruction) });
+    const [first, middle, last] = [named('open the cart'), named('add a mug'), named('check out')];
+    await store.write(KEY, payload('web', { recordedFor: first }));
+    await store.write(OTHER_KEY, payload('web', { recordedFor: last }));
+    // The next run reads the steps in the test's order, the new one included, and records it.
+    const next = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: true });
+    for (const [key, read] of [[KEY, first], ['c'.repeat(64), middle], [OTHER_KEY, last]] as const) await next.read(key, read);
+    await next.write('c'.repeat(64), payload('web', { recordedFor: middle }));
+    const acts = (await readFile(yamlPath(directory), 'utf8')).match(/- act: .*/gu);
+    expect(acts).toEqual(['- act: open the cart', '- act: add a mug', '- act: check out']);
+  });
+
   it('names an agent other than the default on its step', async () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload('web', { recordedFor: step('web', { agent: 'admin' }) }));

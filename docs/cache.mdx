@@ -335,6 +335,8 @@ steps:
   recording's model and summary, and the end wait. Don't review or edit it.
 - A step keeps one recording per target. A recording under a new key
   replaces the old one.
+- Steps are listed in the order the test runs them. A step recorded for
+  the first time goes where it runs, between the steps before and after it.
 - Recordings hold no prompts, conversations, screenshots, observed trees,
   or secret values. A secret fill stores only the secret's name.
 
