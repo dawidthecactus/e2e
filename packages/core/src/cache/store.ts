@@ -436,16 +436,17 @@ export class FileCacheStore implements CacheStore {
     // What reads back is what replays, and the lock's digests are taken from it, so a value the YAML
     // cannot carry as written would replay changed without a word: such a pair is not written.
     if (!(await readsBack(yaml, lock, kept))) return undefined;
-    // Rendered from what was read under the lock: published only while the lock is still this writer's.
-    if (!(await holdsFileLock(this.lockPath(name)))) return undefined;
     await mkdir(this.directory, { recursive: true });
-    await writeFilesAtomic(
+    const replaced = await writeFilesAtomic(
       [
         { path: this.path(name, RECORDING_EXTENSION), content: yaml },
         { path: this.path(name, LOCK_EXTENSION), content: lock },
       ],
-      { mode: 0o600 },
+      // Rendered from what was read under the lock: published only while the lock is still this writer's,
+      // checked as late as can be, once the files are written and only the renames are left.
+      { mode: 0o600, beforeReplace: () => holdsFileLock(this.lockPath(name)) },
     );
+    if (!replaced) return undefined;
     return { bytes: yamlBytes + lockBytes };
   }
 

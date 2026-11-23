@@ -31,6 +31,21 @@ describe('writeFilesAtomic', () => {
     expect((await readdir(directory)).toSorted()).toEqual(['a.lock.json', 'a.yml']);
   });
 
+  it('replaces nothing when asked not to once the temporaries are written', async () => {
+    const directory = await makeDir();
+    await writeFile(path.join(directory, 'a.yml'), 'old a', 'utf8');
+    const written = await writeFilesAtomic(
+      [
+        { path: path.join(directory, 'a.yml'), content: 'new a' },
+        { path: path.join(directory, 'a.lock.json'), content: 'new lock' },
+      ],
+      { beforeReplace: async () => false },
+    );
+    expect(written).toBe(false);
+    expect(await readFile(path.join(directory, 'a.yml'), 'utf8')).toBe('old a');
+    expect(await readdir(directory)).toEqual(['a.yml']);
+  });
+
   it('puts back the files it replaced when a later one fails', async () => {
     const directory = await makeDir();
     await writeFile(path.join(directory, 'a.yml'), 'old a', 'utf8');

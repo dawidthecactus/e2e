@@ -46,13 +46,17 @@ export async function writeFileAtomic(
  */
 export async function writeFilesAtomic(
   files: readonly { readonly path: string; readonly content: string }[],
-  options: AtomicWriteOptions = {},
-): Promise<void> {
+  options: AtomicWriteOptions & {
+    /** Asked once every temporary is written, just before the first rename: false replaces nothing. */
+    readonly beforeReplace?: () => Promise<boolean>;
+  } = {},
+): Promise<boolean> {
   const temporaries = files.map((file) => temporaryPath(file.path));
   try {
     for (const [index, file] of files.entries()) {
       await writeFile(temporaries[index]!, file.content, { encoding: 'utf8', mode: options.mode });
     }
+    if (options.beforeReplace !== undefined && !(await options.beforeReplace())) return false;
     // Each file's previous content, read just before it is replaced: what a failure puts back.
     const previous: (Buffer | undefined)[] = [];
     for (const [index, file] of files.entries()) {
@@ -70,6 +74,7 @@ export async function writeFilesAtomic(
         throw cause;
       }
     }
+    return true;
   } finally {
     // A renamed temporary is gone already; the rest are what a failure left.
     await Promise.all(temporaries.map((temporary) => unlink(temporary).catch(() => undefined)));
