@@ -586,6 +586,9 @@ describe('lifecycle', () => {
       const { env, rejected } = await settle(h.prepare(info));
       expect(rejected, `${method} refused by transient:prepare, B free`).toBeUndefined();
       expect(env[poolVariableIn(env, 'IOS')], `${method} refused by transient:prepare, B free`).toBe(JSON.stringify([{ deviceId: 'B' }]));
+      // The worker starts from the bindings prepare handed back, so it boots B, not A.
+      await expect(boot(h, 'ios', 0, env), method).resolves.toBeUndefined();
+      expect(h.fake.lastArgs('devices.boot'), method).toMatchObject({ udid: 'B' });
     }
     // A boot it refused still moves the slot: another free device costs nothing, and a boot failure ends the run on main.
     const busy = harness({ device: undefined });
