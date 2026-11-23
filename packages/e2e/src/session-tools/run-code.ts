@@ -29,7 +29,7 @@ import type { Credentials, Secrets } from '@e2e-dev/core/lib/types';
 import { SoftFailures } from '@e2e-dev/core/lib/expect/soft';
 import { expect } from '../expect/index.ts';
 import { KeptFailure, Recorder, type Outcome } from './code-recorder.ts';
-import { asRunCodeCall } from './code-strays.ts';
+import { asRunCodeCall, queueRunCodeMicrotask } from './code-strays.ts';
 
 /** How long one screen action or matcher may wait unless the call says otherwise, in milliseconds. */
 const RUN_CODE_TIMEOUT_MS = 5_000;
@@ -159,7 +159,7 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
   const stray: { readonly cause: unknown }[] = [];
   const soft = new SoftFailures();
   const plain = (value: unknown): unknown => redacted(value, redact, (item) => recorder.textOf(item));
-  const scope = { ...objects(options, attempt, args.timeout, recorder, soft), console: logging(logs, plain) };
+  const scope = { ...objects(options, attempt, args.timeout, recorder, soft), console: logging(logs, plain), queueMicrotask: queueRunCodeMicrotask };
   // Aborted when the call ends the code itself, at its timeout or an error nothing caught; with the caller's cancel it is what ends the operation the code is in the middle of.
   const stop = new AbortController();
   const cut = signal === undefined ? stop.signal : AbortSignal.any([signal, stop.signal]);
@@ -288,9 +288,12 @@ function softened<E extends object>(expectation: E, soft: SoftFailures): E {
 /** The names the code always has, which an engine's fixture of the same name does not replace. */
 const BUILT_IN = ['screen', 'app', 'expect', 'credentials', 'secrets'] as const;
 
+/** The globals the code gets the call's own of. */
+const SHADOWED = ['console', 'queueMicrotask'] as const;
+
 /** The engine fixtures the code gets by name: the ones a name can bind, a built-in's aside. */
 function fixtureNames(session: RunCodeSession): readonly string[] {
-  return session.engineFixtures.filter((name) => bindable(name) && !BUILT_IN.some((own) => own === name) && name !== 'console');
+  return session.engineFixtures.filter((name) => bindable(name) && !BUILT_IN.some((own) => own === name) && !SHADOWED.some((own) => own === name));
 }
 
 /** Whether a name can be declared in the code's function: the manifest takes any lower-camel identifier, a reserved word such as `default` included. */

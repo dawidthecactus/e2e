@@ -41,3 +41,21 @@ export function claimRunCodeStray(cause: unknown, warn: (message: string) => voi
   warn(`code a run_code call left running failed after the call ended: ${classifyError(cause).message}`);
   return true;
 }
+
+/**
+ * `queueMicrotask` for the code. Node 22 reports an error a microtask's
+ * callback throws outside the async context it was queued in, so the process
+ * could not tell which call made it; one a tick throws keeps the context.
+ */
+export function queueRunCodeMicrotask(callback: () => void): void {
+  if (typeof callback !== 'function') return queueMicrotask(callback);
+  queueMicrotask(() => {
+    try {
+      callback();
+    } catch (cause) {
+      process.nextTick(() => {
+        throw cause;
+      });
+    }
+  });
+}
