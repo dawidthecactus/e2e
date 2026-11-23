@@ -70,18 +70,6 @@ export function recordingName(testId: string): string {
   return WINDOWS_DEVICE.test(name) ? `test-${name}` : name;
 }
 
-/**
- * How every name `recordingName` gives a test of this file starts: the
- * file's stem. A test id that spells a secret is named differently once
- * the secret is redacted, but only in its titles, so its recordings under
- * either spelling share this.
- */
-export function recordingPrefix(testId: string): string {
-  const parts = testId.split('::');
-  if (parts.length < 2) return '';
-  return kebab((parts[0]!.split('/').pop() ?? '').split('.')[0] ?? '');
-}
-
 /** The name a test takes when another test already holds `name`. */
 export function collisionName(name: string, testId: string): string {
   return `${name}--${sha256Hex(testId).slice(0, COLLISION_DIGEST_CHARS)}`;

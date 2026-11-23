@@ -79,27 +79,12 @@ export async function writeTracePages(report: Report1Document, traced: ReadonlyS
       artifactsDir: relative(options.resultsRoot),
       pageDir: dir,
       readArtifact,
-      ...(store === undefined || options.cacheDir === undefined ? {} : { cacheFiles: await cacheFilesOf(result, store, options.cacheDir, options.projectRoot) }),
+      ...(store === undefined || options.cacheDir === undefined
+        ? {}
+        : { cacheFile: displayPath(options.projectRoot, path.join(options.cacheDir, await store.recordingFile(result.testId))) }),
     });
     await writeTextReport(file, page);
     pages.set(result.id, relative(file));
   }
   return pages;
-}
-
-/**
- * The recording file of each cache key the result's steps name, as the
- * reader should see it: found by the key, since a test can file steps
- * under more than one spelling of its id.
- */
-async function cacheFilesOf(result: ReportResult, store: FileCacheStore, cacheDir: string, projectRoot: string): Promise<ReadonlyMap<string, string>> {
-  const files = new Map<string, string>();
-  for (const attempt of result.attempts) {
-    for (const step of attempt.steps) {
-      const key = step.cache?.entry;
-      if (key === undefined || files.has(key)) continue;
-      files.set(key, displayPath(projectRoot, path.join(cacheDir, await store.recordingFile(key, result.testId))));
-    }
-  }
-  return files;
 }

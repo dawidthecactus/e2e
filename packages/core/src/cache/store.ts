@@ -38,16 +38,13 @@ import {
   type ParsedRecordingFile,
   type StoredRecording,
 } from './recording-file.ts';
-import { collisionName, RECORDING_NAME, recordingName, recordingPrefix } from './recording-name.ts';
+import { collisionName, RECORDING_NAME, recordingName } from './recording-name.ts';
 import { MAX_TRACE_END_WAIT_MS, MAX_TRACE_TEST_ID_CHARS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
 
 /** Hard wire ceiling on one stored file, on both the read and the write path. */
 export const MAX_CACHE_WIRE_BYTES = 1_048_576;
 
 const KEY_HASH = /^[a-f0-9]{64}$/u;
-
-/** Each pair as last read, by its path and the store's size cap, beside the identity of its files then (`load`). */
-const loadedPairs = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
 
 /** The suffix a colliding test's name carries after its base name (`collisionName`). */
 const COLLISION_SUFFIX = /--[a-f0-9]{12}$/u;
@@ -120,6 +117,8 @@ export class FileCacheStore implements CacheStore {
   private readonly maxBytes: number;
   /** The steps read for each test, in the order they were read: where a step new to a file goes (`placeFor`). */
   private readonly readOrder = new Map<string, string[]>();
+  /** Each pair as last read, beside the identity of its files then (`load`). */
+  private readonly loaded = new Map<string, { readonly stamp: string; readonly file: LoadedFile | undefined }>();
 
   constructor(options: FileCacheStoreOptions) {
     this.directory = options.directory;
@@ -145,9 +144,7 @@ export class FileCacheStore implements CacheStore {
       if (file.parsed.status === 'invalid') return { status: 'invalid', reason: file.parsed.reason, bytes: file.bytes };
       return findEntry(file, keyHash);
     });
-    if (own !== undefined) return own;
-    const [holder] = await this.holders(keyHash, step.testId);
-    return holder?.found ?? { status: 'miss' };
+    return own ?? { status: 'miss' };
   }
 
   async write(keyHash: string, payload: ActionTrace): Promise<{ bytes: number } | undefined> {
@@ -156,7 +153,7 @@ export class FileCacheStore implements CacheStore {
     const slot = stepIdentity(payload.recordedFor);
     if (testId === undefined || slot === undefined) return undefined;
     const base = recordingName(testId);
-    const saved = await this.locked(base, async () => {
+    return this.locked(base, async () => {
       const file = await this.locate(base, testId);
       // Rewriting a pair drops what does not read; that is a person's to fix, not a write's to erase.
       if (file !== undefined && unreadable(file, keyHash) !== undefined) return undefined;
@@ -175,26 +172,17 @@ export class FileCacheStore implements CacheStore {
       const next = recordings.filter((existing) => existing.keyHash !== keyHash && !sameSlot(existing));
       if (index >= 0) next.splice(Math.min(index, next.length), 0, recording);
       else next.splice(this.placeFor(testId, slot, next), 0, recording);
-      const written = await this.save(name, testId, next);
-      return written === undefined ? undefined : { name, written };
+      return this.save(name, testId, next);
     }, true);
-    if (saved === undefined) return undefined;
-    // The key's earlier recording filed under another spelling of the test's id (`holders`) would
-    // otherwise replay to a lookup that names that spelling. Its removal is the old copy's, never this write's.
-    for (const holder of await this.holders(keyHash, testId)) {
-      if (holder.name !== saved.name) await this.evictFrom(holder.name, keyHash).catch(() => undefined);
-    }
-    return saved.written;
   }
 
   async delete(keyHash: string, step?: TraceProvenance): Promise<void> {
     if (!this.writable || !KEY_HASH.test(keyHash)) return;
-    // Wherever a read could find the key: under either spelling of the test's id (`holders`).
-    const names =
-      step === undefined
-        ? (await this.list()).filter((file) => findEntry(file, keyHash) !== undefined).map((file) => file.name)
-        : (await this.holders(keyHash, step.testId)).map((holder) => holder.name);
-    for (const name of names) await this.evictFrom(name, keyHash);
+    const testId = step?.testId ?? (await this.list()).find((file) => findEntry(file, keyHash) !== undefined)?.parsed.testId;
+    if (testId === undefined) return;
+    const base = recordingName(testId);
+    const name = await this.locked(base, async () => (await this.locate(base, testId))?.name);
+    if (name !== undefined) await this.evictFrom(name, keyHash);
   }
 
   /** Drops one key's recording from one pair, under its test's lock. */
@@ -213,17 +201,14 @@ export class FileCacheStore implements CacheStore {
   }
 
   /**
-   * The reviewed file that holds a step's recording, by its key, under
-   * whichever spelling of the test's id it was filed (`holders`); for a key
-   * it holds nowhere, the file the test's recordings are in, or would be
-   * written to. The test id is cut as a recording keeps it, which is what
-   * the store names files from. Not part of `CacheStore`: trace pages name
-   * the file beside a step's key.
+   * The reviewed file a test's recordings are in, or would be written to:
+   * its own name, or the colliding one when another test holds that. The
+   * test id is cut as a recording keeps it, which is what the store names
+   * files from. Not part of `CacheStore`: trace pages name the file beside
+   * a step's key.
    */
-  async recordingFile(keyHash: string | undefined, testId: string): Promise<string> {
+  async recordingFile(testId: string): Promise<string> {
     const recorded = bound(testId, MAX_TRACE_TEST_ID_CHARS);
-    const [holder] = keyHash === undefined || !KEY_HASH.test(keyHash) ? [] : await this.holders(keyHash, recorded);
-    if (holder !== undefined) return `${holder.name}${RECORDING_EXTENSION}`;
     const base = recordingName(recorded);
     const own = await this.locate(base, recorded);
     if (own !== undefined) return `${own.name}${RECORDING_EXTENSION}`;
@@ -282,40 +267,6 @@ export class FileCacheStore implements CacheStore {
       if (file !== undefined && file.unconfirmed !== true) files.push(file);
     }
     return files;
-  }
-
-  /**
-   * Every pair of the test's file that holds the key, each read under its
-   * lock. A recording made after the run learned a secret the test's id
-   * spells is filed under the id redacted, which a lookup made before the
-   * run learns it (the next run's) cannot name, and one test can have
-   * recordings under both. The spellings differ only in titles, so only the
-   * pairs of the test's file are read: every pair when the file's name
-   * leaves nothing to tell it by (`core:` keys, a name in another script),
-   * and the test's own names too, since a long id is cut to the same name
-   * either way.
-   */
-  private async holders(keyHash: string, testId: string): Promise<{ readonly name: string; readonly found: CacheReadResult }[]> {
-    const prefix = recordingPrefix(testId);
-    let names: string[];
-    try {
-      names = await readdir(this.directory);
-    } catch {
-      return [];
-    }
-    const stems = new Set(names.flatMap((name) => {
-      const stem = recordingStem(name);
-      return stem !== undefined && (prefix === '' || stem === prefix || stem.startsWith(`${prefix}-`)) ? [stem] : [];
-    }));
-    const holders: { readonly name: string; readonly found: CacheReadResult }[] = [];
-    for (const stem of [...stems].toSorted()) {
-      const found = await this.locked(stem.replace(COLLISION_SUFFIX, ''), async () => {
-        const file = await this.load(stem);
-        return file === undefined ? undefined : findEntry(file, keyHash);
-      });
-      if (found !== undefined) holders.push({ name: stem, found });
-    }
-    return holders;
   }
 
   private noteRead(step: TraceProvenance): void {
@@ -399,12 +350,10 @@ export class FileCacheStore implements CacheStore {
       stat(this.path(name, extension)).then((stats) => `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`, () => '-'),
     ));
     const stamp = stamps.join(' ');
-    // Shared by every store on the directory: a worker's attempts each make their own.
-    const memo = `${String(this.maxBytes)}\0${this.path(name, '')}`;
-    const known = loadedPairs.get(memo);
+    const known = this.loaded.get(name);
     if (known?.stamp === stamp) return known.file;
     const file = await this.readPair(name);
-    loadedPairs.set(memo, { stamp, file });
+    this.loaded.set(name, { stamp, file });
     return file;
   }
 

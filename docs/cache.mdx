@@ -357,6 +357,11 @@ steps:
   are lost.
 - Recordings hold no prompts, conversations, screenshots, observed trees,
   or secret values. A secret fill stores only the secret's name.
+- A test whose title spells a secret value the run learns only during the
+  test (an account a provider resolves, say) is filed under its title with
+  the value redacted. The next run looks the test up before it learns the
+  value, so the test records again instead of replaying. Keep secret values
+  out of test titles.
 
 <Warning>
 Other typed values are stored as typed. Review recordings before you share

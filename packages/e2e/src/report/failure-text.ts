@@ -47,8 +47,8 @@ export interface TracePageOptions {
   readonly pageDir?: string | undefined;
   /** Reads one artifact by its report path, for inlining the screen text; absent when the files are not at hand. */
   readonly readArtifact?: ((reportPath: string) => string | undefined) | undefined;
-  /** The file holding each replay recording the steps name, by cache key, as the reader should see it; each recorded step names its file with its key. */
-  readonly cacheFiles?: ReadonlyMap<string, string> | undefined;
+  /** The file holding the test's replay recordings, as the reader should see it; each recorded step names it with its key. */
+  readonly cacheFile?: string | undefined;
 }
 
 // --- facts shared with the run page ---
@@ -364,9 +364,9 @@ function appLogLine(entry: AppLogRecord, format: 'markdown' | 'text' = 'markdown
  * poll that waited or failed (the values it read in order), where the app
  * went, and every line the app logged while it ran (`appLog`, the attempt's).
  */
-function stepDetailLines(step: ReportStep, appLog: readonly AppLogRecord[], options: Pick<TracePageOptions, 'cacheFiles'> = {}): string[] {
+function stepDetailLines(step: ReportStep, appLog: readonly AppLogRecord[], options: Pick<TracePageOptions, 'cacheFile'> = {}): string[] {
   const lines: string[] = [];
-  if (step.cache !== undefined) lines.push(cacheLine(step.cache, step.cache.entry === undefined ? undefined : options.cacheFiles?.get(step.cache.entry)));
+  if (step.cache !== undefined) lines.push(cacheLine(step.cache, options.cacheFile));
   const items: PageItem[] = [
     ...step.events
       .filter((event) => event.kind === 'engine' || event.kind === 'navigation' || (event.kind === 'poll' && ((event.count ?? 0) > 1 || event.status !== 'passed')))
