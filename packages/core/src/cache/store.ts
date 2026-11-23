@@ -97,8 +97,12 @@ export interface ListedRecordingFile {
   readonly parsed: ParsedRecordingFile;
 }
 
-/** A pair read from disk: its name, size, and what it holds; undefined when neither file exists or neither is the store's. */
-type LoadedFile = ListedRecordingFile;
+/**
+ * A pair read from disk: its name, size, and what it holds; undefined when
+ * neither file exists or neither is the store's. `unconfirmed` when a file
+ * could not be opened, so nothing says whose it is.
+ */
+type LoadedFile = ListedRecordingFile & { readonly unconfirmed?: true };
 
 export class FileCacheStore implements CacheStore {
   readonly writable: boolean;
@@ -204,7 +208,8 @@ export class FileCacheStore implements CacheStore {
     const files: ListedRecordingFile[] = [];
     for (const stem of [...stems].toSorted()) {
       const file = await this.load(stem);
-      if (file !== undefined) files.push(file);
+      // One the store cannot tell is its own is not listed: `e2e cache clear` must not delete it.
+      if (file !== undefined && file.unconfirmed !== true) files.push(file);
     }
     return files;
   }
@@ -294,7 +299,10 @@ export class FileCacheStore implements CacheStore {
   private async readPair(name: string): Promise<LoadedFile | undefined> {
     const yaml = await this.readCapped(this.path(name, RECORDING_EXTENSION));
     const lock = await this.readCapped(this.path(name, LOCK_EXTENSION));
-    if (!writtenByStore(yaml?.head, lock?.head)) return undefined;
+    // A file that exists but cannot be opened (another account's, say) says nothing about whose it is.
+    const unopened = [yaml, lock].some((file) => file !== undefined && file.head === undefined);
+    const owned = writtenByStore(yaml?.head, lock?.head);
+    if (!owned && !unopened) return undefined;
     const bytes = (yaml?.bytes ?? 0) + (lock?.bytes ?? 0);
     const problem = yaml?.problem ?? lock?.problem;
     if (problem !== undefined || yaml?.text === undefined || lock?.text === undefined) {
@@ -305,6 +313,7 @@ export class FileCacheStore implements CacheStore {
       return {
         name,
         bytes,
+        ...(owned ? {} : { unconfirmed: true }),
         parsed: {
           status: 'invalid',
           ...(testId === undefined ? {} : { testId }),

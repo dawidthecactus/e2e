@@ -421,6 +421,21 @@ describe('FileCacheStore', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads a pair it cannot open as invalid, never a miss, and does not list it', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    await chmod(yamlPath(directory), 0o000);
+    await chmod(lockPath(directory), 0o000);
+    try {
+      const read = await store.read(KEY, step());
+      expect(read.status === 'invalid' && read.reason).toMatch(/unreadable/u);
+      expect(await store.list()).toEqual([]);
+    } finally {
+      await chmod(yamlPath(directory), 0o600);
+      await chmod(lockPath(directory), 0o600);
+    }
+  });
+
   it('refuses to write a file over its byte cap', async () => {
     const { store } = await makeStore({ maxBytes: 64 });
     expect(await store.write(KEY, payload())).toBeUndefined();
