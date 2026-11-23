@@ -146,7 +146,8 @@ export class FileCacheStore implements CacheStore {
       return findEntry(file, keyHash);
     });
     if (own !== undefined) return own;
-    return (await this.findElsewhere(keyHash, step.testId))?.found ?? { status: 'miss' };
+    const [holder] = await this.holders(keyHash, step.testId);
+    return holder?.found ?? { status: 'miss' };
   }
 
   async write(keyHash: string, payload: ActionTrace): Promise<{ bytes: number } | undefined> {
@@ -155,7 +156,7 @@ export class FileCacheStore implements CacheStore {
     const slot = stepIdentity(payload.recordedFor);
     if (testId === undefined || slot === undefined) return undefined;
     const base = recordingName(testId);
-    return this.locked(base, async () => {
+    const saved = await this.locked(base, async () => {
       const file = await this.locate(base, testId);
       // Rewriting a pair drops what does not read; that is a person's to fix, not a write's to erase.
       if (file !== undefined && unreadable(file, keyHash) !== undefined) return undefined;
@@ -174,35 +175,40 @@ export class FileCacheStore implements CacheStore {
       const next = recordings.filter((existing) => existing.keyHash !== keyHash && !sameSlot(existing));
       if (index >= 0) next.splice(Math.min(index, next.length), 0, recording);
       else next.splice(this.placeFor(testId, slot, next), 0, recording);
-      return this.save(name, testId, next);
+      const written = await this.save(name, testId, next);
+      return written === undefined ? undefined : { name, written };
     }, true);
+    if (saved === undefined) return undefined;
+    // The key's earlier recording filed under another spelling of the test's id (`holders`) would
+    // otherwise replay to a lookup that names that spelling. Its removal is the old copy's, never this write's.
+    for (const holder of await this.holders(keyHash, testId)) {
+      if (holder.name !== saved.name) await this.evictFrom(holder.name, keyHash).catch(() => undefined);
+    }
+    return saved.written;
   }
 
   async delete(keyHash: string, step?: TraceProvenance): Promise<void> {
     if (!this.writable || !KEY_HASH.test(keyHash)) return;
-    let testId = step?.testId ?? (await this.list()).find((file) => findEntry(file, keyHash) !== undefined)?.parsed.testId;
-    if (step !== undefined) {
-      const base = recordingName(step.testId);
-      const holds = await this.locked(base, async () => {
-        const file = await this.locate(base, step.testId);
-        return file !== undefined && findEntry(file, keyHash) !== undefined;
-      });
-      // Evict where the read found it, which may be under the test's name redacted (`findElsewhere`).
-      if (!holds) testId = (await this.findElsewhere(keyHash, step.testId))?.file.parsed.testId ?? step.testId;
-    }
-    if (testId === undefined) return;
-    const base = recordingName(testId);
-    await this.locked(base, async () => {
-      const file = await this.locate(base, testId);
+    // Wherever a read could find the key: under either spelling of the test's id (`holders`).
+    const names =
+      step === undefined
+        ? (await this.list()).filter((file) => findEntry(file, keyHash) !== undefined).map((file) => file.name)
+        : (await this.holders(keyHash, step.testId)).map((holder) => holder.name);
+    for (const name of names) await this.evictFrom(name, keyHash);
+  }
+
+  /** Drops one key's recording from one pair, under its test's lock. */
+  private async evictFrom(name: string, keyHash: string): Promise<void> {
+    await this.locked(name.replace(COLLISION_SUFFIX, ''), async () => {
+      const file = await this.load(name);
       // A pair that does not read replays nothing, so nothing in it needs evicting; it waits for a person.
       if (file === undefined || file.parsed.status === 'invalid') return;
       if (!file.parsed.recordings.some((recording) => recording.keyHash === keyHash)) return;
       const problem = unreadable(file, keyHash);
       if (problem !== undefined) throw new Error(`cannot evict ${keyHash.slice(0, 12)} without dropping a recording that does not read: ${problem}`);
-      const recordings = hits(file.parsed);
-      const next = recordings.filter((recording) => recording.keyHash !== keyHash);
+      const next = hits(file.parsed).filter((recording) => recording.keyHash !== keyHash);
       if (next.length === 0) await this.remove(file.name);
-      else await this.save(file.name, testId, next);
+      else await this.save(file.name, file.parsed.testId, next);
     });
   }
 
@@ -260,36 +266,37 @@ export class FileCacheStore implements CacheStore {
   }
 
   /**
-   * A key's recording in another pair of the same test file than the one
-   * the step's test id names. A recording made after the run learned a
-   * secret the test's id spells is filed under the id redacted, which a
-   * lookup made before the run learns it (the next run's) cannot name, and
-   * one attempt can file a test's steps under both. The other spelling
-   * differs only in the titles, so only pairs of the test's file are read.
+   * Every pair of the test's file that holds the key, each read under its
+   * lock. A recording made after the run learned a secret the test's id
+   * spells is filed under the id redacted, which a lookup made before the
+   * run learns it (the next run's) cannot name, and one test can have
+   * recordings under both. The spellings differ only in titles, so only the
+   * pairs of the test's file are read: every pair when the file's name
+   * leaves nothing to tell it by (`core:` keys, a name in another script),
+   * and the test's own names too, since a long id is cut to the same name
+   * either way.
    */
-  private async findElsewhere(keyHash: string, testId: string): Promise<{ readonly file: LoadedFile; readonly found: CacheReadResult } | undefined> {
+  private async holders(keyHash: string, testId: string): Promise<{ readonly name: string; readonly found: CacheReadResult }[]> {
     const prefix = recordingPrefix(testId);
-    const base = recordingName(testId);
-    const own = new Set([base, collisionName(base, testId)]);
     let names: string[];
     try {
       names = await readdir(this.directory);
     } catch {
-      return undefined;
+      return [];
     }
     const stems = new Set(names.flatMap((name) => {
       const stem = recordingStem(name);
-      return stem === undefined || own.has(stem) || !(stem === prefix || stem.startsWith(`${prefix}-`)) ? [] : [stem];
+      return stem !== undefined && (prefix === '' || stem === prefix || stem.startsWith(`${prefix}-`)) ? [stem] : [];
     }));
+    const holders: { readonly name: string; readonly found: CacheReadResult }[] = [];
     for (const stem of [...stems].toSorted()) {
-      const result = await this.locked(stem.replace(COLLISION_SUFFIX, ''), async () => {
+      const found = await this.locked(stem.replace(COLLISION_SUFFIX, ''), async () => {
         const file = await this.load(stem);
-        const found = file === undefined ? undefined : findEntry(file, keyHash);
-        return file === undefined || found === undefined ? undefined : { file, found };
+        return file === undefined ? undefined : findEntry(file, keyHash);
       });
-      if (result !== undefined) return result;
+      if (found !== undefined) holders.push({ name: stem, found });
     }
-    return undefined;
+    return holders;
   }
 
   private noteRead(step: TraceProvenance): void {

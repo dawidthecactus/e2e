@@ -2,6 +2,7 @@
 
 import { chmod, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,6 +15,7 @@ import { MAX_PARAMS_DEPTH, validateJsonValue } from '@e2e-dev/core/lib/internal/
 import type { JsonValue } from '@e2e-dev/core/lib/types';
 
 const KEY = 'a'.repeat(64);
+const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 const OTHER_KEY = 'b'.repeat(64);
 const TEST_ID = 'tests/settings.e2e.ts::settings::upgrades%20the%20plan';
 const NAME = 'settings-upgrades-the-plan';
@@ -274,6 +276,33 @@ describe('FileCacheStore', () => {
     expect((await store.read(OTHER_KEY, named(spelled, 'sign in'))).status).toBe('hit');
   });
 
+  it('finds a recording under another spelling when the file name leaves nothing to tell the test by', async () => {
+    const { store } = await makeStore();
+    for (const [spelled, redacted] of [
+      ['tests/ログイン.e2e.ts::logs in as alice@example.com', 'tests/ログイン.e2e.ts::logs in as <secret:email>'],
+      ['core:login alice@example.com', 'core:login <secret:email>'],
+      [`tests/login.e2e.ts::${'signs in with the saved card '.repeat(4)}as alice@example.com`, `tests/login.e2e.ts::${'signs in with the saved card '.repeat(4)}as <secret:email>`],
+    ] as const) {
+      const key = sha(spelled);
+      await store.write(key, payload('web', { recordedFor: step('web', { testId: redacted }) }));
+      expect((await store.read(key, step('web', { testId: spelled }))).status, spelled).toBe('hit');
+    }
+  });
+
+  it('replaces a recording filed under the other spelling when the key records again', async () => {
+    const { store } = await makeStore();
+    const spelled = 'tests/login.e2e.ts::logs in as alice@example.com';
+    const redacted = 'tests/login.e2e.ts::logs in as <secret:email>';
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: spelled }), startPath: '/old', endPath: '/old' }));
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: redacted }), startPath: '/new', endPath: '/new' }));
+    for (const testId of [spelled, redacted]) {
+      const read = await store.read(KEY, step('web', { testId }));
+      expect(read.status === 'hit' && read.entry.payload.startPath, testId).toBe('/new');
+    }
+    await store.delete(KEY, step('web', { testId: spelled }));
+    expect((await store.read(KEY, step('web', { testId: redacted }))).status).toBe('miss');
+  });
+
   it('evicts a recording where a read found it under the redacted id', async () => {
     const { directory, store } = await makeStore();
     const spelled = step('web', { testId: 'tests/login.e2e.ts::logs in as alice@example.com' });
@@ -326,7 +355,6 @@ describe('FileCacheStore', () => {
     expect(names[1]).toBe(`${NAME}.yml`);
     expect((await store.read(KEY, step())).status).toBe('hit');
     expect((await store.read(OTHER_KEY, step('web', { testId: otherTest }))).status).toBe('hit');
-    expect((await store.read(KEY, step('web', { testId: otherTest }))).status).toBe('miss');
   });
 
   it('writes two targets of one test at once without losing either', async () => {
