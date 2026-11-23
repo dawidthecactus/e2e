@@ -19,7 +19,7 @@ import { sameRoute } from '../cache/route.ts';
 import { keyContextChanges, type CacheAgentIdentity } from '../cache/identity.ts';
 import { recordedProvenance, TraceRecorder } from '../cache/recorder.ts';
 import { expandTrace, templateParams, templatesCollide, templateTrace, type ParamTemplate } from '../cache/template.ts';
-import { targetLabel, type ActionTrace, type DerivedReason, type RecordedModel, type TraceEntry, type TraceTargetDescriptor } from '../cache/trace.ts';
+import { targetLabel, type ActionTrace, type DerivedReason, type RecordedModel, type TraceEntry, type TraceProvenance, type TraceTargetDescriptor } from '../cache/trace.ts';
 import { readTraceEntry } from '../cache/trace-read.ts';
 import { sleep } from '../internal/time.ts';
 import type { StepCacheInfo } from '../run/steps.ts';
@@ -386,8 +386,9 @@ export class StepTraceSession {
    */
   private async readEntry(): Promise<EntryRead> {
     let read: Awaited<ReturnType<AgentCacheContext['store']['read']>>;
+    const step = recordedProvenance(this.claim.step, this.options.redact);
     try {
-      read = await this.cache.store.read(this.keyHash, recordedProvenance(this.claim.step, this.options.redact));
+      read = await this.cache.store.read(this.keyHash, step);
     } catch {
       return { status: 'miss', reason: 'invalid-entry', unavailable: true };
     }
@@ -395,6 +396,10 @@ export class StepTraceSession {
     if (read.status === 'invalid') return { status: 'miss', reason: 'invalid-entry' };
     const entry = readTraceEntry(read.entry);
     if (entry === undefined) return { status: 'miss', reason: 'invalid-entry' };
+    // The key is the store's to keep, the step is the entry's own record of what it was recorded for:
+    // an entry filed under this step's key that names another step (keys swapped in a hand-merged
+    // lock file, say) never replays for this one.
+    if (!recordedForStep(entry.payload.recordedFor, step)) return { status: 'miss', reason: 'invalid-entry' };
     // The stored recording has a slot for each `unique()` value; this call's
     // values fill it. A slot this call cannot fill is an entry recorded for
     // another shape, which the key should have kept apart.
@@ -816,4 +821,20 @@ export function recordedVerdictOf(summary: string): string {
   if (!summary.startsWith(REPLAY_NOTICE_START)) return summary;
   const at = summary.indexOf(RECORDED_VERDICT_SEPARATOR);
   return at === -1 ? summary : summary.slice(at + RECORDED_VERDICT_SEPARATOR.length);
+}
+
+/**
+ * Whether an entry's provenance, when it keeps one, names the step: the
+ * same instruction, params, occurrence, agent, and target. An entry that
+ * keeps none (a custom store's older entry) is not held to it.
+ */
+function recordedForStep(recordedFor: TraceProvenance | undefined, step: TraceProvenance): boolean {
+  if (recordedFor === undefined) return true;
+  return (
+    recordedFor.instructionDigest === step.instructionDigest &&
+    recordedFor.targetId === step.targetId &&
+    (recordedFor.paramsDigest === undefined || recordedFor.paramsDigest === step.paramsDigest) &&
+    (recordedFor.callIndex === undefined || recordedFor.callIndex === step.callIndex) &&
+    (recordedFor.agent === undefined || recordedFor.agent === step.agent)
+  );
 }

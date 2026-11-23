@@ -313,6 +313,20 @@ describe('StepTraceSession', () => {
     expect(session.cacheInfo).toEqual({ mode: 'missed', reason: 'truncated', replayedActions: 0, totalActions: 50, entry: 'a'.repeat(64) });
   });
 
+  it('never replays an entry under its key that was recorded for another step', async () => {
+    // Keys swapped in a hand-merged lock file, say: the entry under this step's key names "delete the account".
+    const other = buildTraceEntry({
+      actions: [{ name: 'tap', summary: 'tap button "Delete account"', target: { role: 'button', name: 'Delete account' } }],
+      executor: { name: 'recorded-agent' },
+      recordedFor: { ...exampleStep, instructionDigest: instructionDigest('delete the account') },
+      summary: 'deleted the account',
+      startPath: '/',
+    });
+    const session = makeSession(fakeContext(async () => ({ status: 'hit', entry: other, bytes: 1 })), makeHost(['/']));
+    await expect(session.begin()).resolves.toBeUndefined();
+    expect(session.cacheInfo).toMatchObject({ mode: 'missed', reason: 'invalid-entry', replayedActions: 0 });
+  });
+
   it('degrades a hit that is not a trace-1 entry to a miss, whichever store returned it', async () => {
     const malformed = { schemaVersion: 'trace-1', payload: { actions: 'not a list' } } as unknown as TraceEntry;
     const session = makeSession(
