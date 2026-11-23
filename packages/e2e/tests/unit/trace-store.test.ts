@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { instructionDigest, paramsDigest } from '@e2e-dev/core/lib/cache/identity';
-import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '@e2e-dev/core/lib/cache/store';
-import type { ActionTrace, TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES, recordingFileName } from '@e2e-dev/core/lib/cache/store';
+import { MAX_TRACE_DESCRIPTOR_CHARS, type ActionTrace, type TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
+import { bound } from '@e2e-dev/core/lib/internal/text';
 import { MAX_PARAMS_DEPTH, validateJsonValue } from '@e2e-dev/core/lib/internal/json-value';
 import type { JsonValue } from '@e2e-dev/core/lib/types';
 
@@ -183,6 +184,15 @@ describe('FileCacheStore', () => {
     const { store } = await makeStore();
     await store.write(KEY, payload('__proto__'));
     expect((await store.read(KEY, step('__proto__'))).status).toBe('hit');
+  });
+
+  it('names the file a test with a long id records into', async () => {
+    const { directory, store } = await makeStore();
+    const longId = `tests/${'component/'.repeat(40)}pay.e2e.ts::pays`;
+    // A recording keeps the test id cut to its bound, and the store names the file from that.
+    await store.write(KEY, payload('web', { recordedFor: step('web', { testId: bound(longId, MAX_TRACE_DESCRIPTOR_CHARS) }) }));
+    const written = (await readdir(directory)).find((name) => name.endsWith('.yml'));
+    expect(await recordingFileName(directory, longId)).toBe(written);
   });
 
   it('names an agent other than the default on its step', async () => {

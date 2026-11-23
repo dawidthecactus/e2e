@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { writeFilesAtomic } from '../internal/atomic-write.ts';
 import { errorMessage } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
+import { bound } from '../internal/text.ts';
 import { withFileLock } from './file-lock.ts';
 import {
   parseRecordingFile,
@@ -37,7 +38,7 @@ import {
   type StoredRecording,
 } from './recording-file.ts';
 import { collisionName, RECORDING_NAME, recordingName } from './recording-name.ts';
-import { MAX_TRACE_END_WAIT_MS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
+import { MAX_TRACE_DESCRIPTOR_CHARS, MAX_TRACE_END_WAIT_MS, type ActionTrace, type TraceEntry, type TraceProvenance } from './trace.ts';
 
 /** Hard wire ceiling on one stored file, on both the read and the write path. */
 export const MAX_CACHE_WIRE_BYTES = 1_048_576;
@@ -342,11 +343,13 @@ export class FileCacheStore implements CacheStore {
  * The reviewed file that holds, or would hold, a test's recordings in the
  * file store at `directory`: the one named for the test, or its colliding
  * name when that file exists, since only a write that met another test's
- * file takes it.
+ * file takes it. The test id is cut as a recording keeps it, which is what
+ * the store names the file from.
  */
 export async function recordingFileName(directory: string, testId: string): Promise<string> {
-  const base = recordingName(testId);
-  const collided = `${collisionName(base, testId)}${RECORDING_EXTENSION}`;
+  const recorded = bound(testId, MAX_TRACE_DESCRIPTOR_CHARS);
+  const base = recordingName(recorded);
+  const collided = `${collisionName(base, recorded)}${RECORDING_EXTENSION}`;
   return (await stat(join(directory, collided)).then(() => true, () => false)) ? collided : `${base}${RECORDING_EXTENSION}`;
 }
 
