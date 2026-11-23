@@ -501,6 +501,23 @@ function callName(step: { readonly api: string; readonly label: string }): strin
   return step.label === '' ? step.api : `${step.api} ${quoted(step.label)}`;
 }
 
+/** What the recorder keeps about one step while its body runs; dropped whole when the body ends. */
+interface ActiveStep {
+  readonly record: StepRecord;
+  /** The `owner` that started the step, as `abandonRunning` names it. */
+  readonly owner: string;
+  /** The stack the step was started from, for the error it fails with when abandoned or named. */
+  readonly stack?: string;
+  /** The promise the step returned to its caller, observed when the caller did not. */
+  pending?: Promise<unknown>;
+  /** Set once the code that started the step returned without awaiting it: recorded as failed already, whatever it does next. */
+  abandoned?: true;
+  /** What the step fails with in place of the abort reason `nameRunning` named it for. */
+  named?: { readonly reason: Error; readonly error: Error };
+  /** The last screen the step saw, read only when it ends. */
+  seenScreen?: () => ScreenText | undefined;
+}
+
 export class StepRecorder {
   private readonly attempt: { readonly id: string; readonly index: number };
   private readonly steps: StepRecord[] = [];
@@ -523,28 +540,16 @@ export class StepRecorder {
   private readonly held = new Set<HeldCall>();
   /** Pauses waiting at `hold`, ordered by when they were called. */
   private readonly pauses = new Set<HeldPause>();
-  /** IDs of steps whose bodies are still executing. */
-  private readonly running = new Set<string>();
-  /** The promise each running step returned to its caller, to observe when the caller did not. */
-  private readonly pending = new Map<string, Promise<unknown>>();
-  /** The stack each running step was started from, for the error a step abandoned by the body carries. */
-  private readonly stacks = new Map<string, string>();
-  /** The `owner` each running step was started by. */
-  private readonly owners = new Map<string, string>();
-  /** Steps the body returned without awaiting: recorded as failed already, whatever they do next. */
-  private readonly abandoned = new Set<string>();
+  /** Steps whose bodies are still executing, by id, in the order they started. */
+  private readonly active = new Map<string, ActiveStep>();
   /** The promises of abandoned steps, for the wait before teardown. */
   private readonly abandonedPromises: Promise<unknown>[] = [];
-  /** What each step named by `nameRunning` fails with, in place of the abort reason it was named for. */
-  private readonly named = new Map<string, { readonly reason: Error; readonly error: Error }>();
   /** The index every step before which a passed verification proves, or -1 when none has passed. */
   private lastVerified = -1;
   /** What the app logged this attempt, within `APP_LOG_LIMITS`. */
   private readonly logged: AppLogRecord[] = [];
   /** App log entries of each kind `APP_LOG_LIMITS` counts, kept so far. */
   private readonly loggedCounts = { errorsAndWarnings: 0, info: 0 };
-  /** The last screen each running step saw, read only when the step ends. */
-  private readonly seenScreens = new Map<string, () => ScreenText | undefined>();
   /** The last screen a finished step saw, the one the next step's is compared with. */
   private lastScreen: { readonly step: number; readonly screen: ScreenText } | undefined;
   /** Where the app went before the attempt's first step, told under it once it starts. */
@@ -585,7 +590,7 @@ export class StepRecorder {
 
   /** Whether a step is still executing. */
   get busy(): boolean {
-    return this.running.size > 0;
+    return this.active.size > 0;
   }
 
   /** The step currently executing, when inside StepRecorder.run. */
@@ -740,9 +745,9 @@ export class StepRecorder {
     // A verification run inside another step (an `onAction` hook's) proves
     // only what the steps before that one left, never the step still running.
     const verifiesBefore = parent?.index ?? this.opened;
-    const record = this.open(kind, api, label, stack, options);
-    const promise = this.execute(record, body, options, verifiesBefore);
-    this.pending.set(record.id, promise);
+    const step = this.open(kind, api, label, stack, options);
+    const promise = this.execute(step, body, options, verifiesBefore);
+    step.pending = promise;
     return promise;
   }
 
@@ -771,21 +776,21 @@ export class StepRecorder {
   }
 
   /** Records a step as started now and tells reporters. */
-  private open(kind: StepKind, api: string, label: string, stack: string | undefined, options: StepRunOptions): StepRecord {
+  private open(kind: StepKind, api: string, label: string, stack: string | undefined, options: StepRunOptions): ActiveStep {
     const record = this.file({ kind, api, label, source: sourceLocation(stack, this.projectRoot), agent: options.agent });
-    this.running.add(record.id);
+    const step: ActiveStep = { record, owner: this.owner, ...(stack === undefined ? {} : { stack }) };
+    this.active.set(record.id, step);
     // Only a finished step is dropped, and only from the front, so a running
     // one keeps its record, the one opened here included: with nothing
     // retained it is still there for `abandonRunning` to fail.
-    while (this.retainSteps !== undefined && this.steps.length > this.retainSteps && !this.running.has(this.steps[0]!.id)) this.steps.shift();
+    while (this.retainSteps !== undefined && this.steps.length > this.retainSteps && !this.active.has(this.steps[0]!.id)) this.steps.shift();
     for (const { line, at } of this.earlyNavigations.splice(0)) this.fileNavigation(record, line, at);
-    if (stack !== undefined) this.stacks.set(record.id, stack);
-    this.owners.set(record.id, this.owner);
     this.publishStart(record);
-    return record;
+    return step;
   }
 
-  private async execute<T>(record: StepRecord, body: () => Promise<T>, options: StepRunOptions, verifiesBefore: number): Promise<T> {
+  private async execute<T>(step: ActiveStep, body: () => Promise<T>, options: StepRunOptions, verifiesBefore: number): Promise<T> {
+    const { record } = step;
     const startedMs = Date.now();
     const reading = pollReadSignal();
     const signal = reading === undefined || this.signal === undefined
@@ -795,17 +800,17 @@ export class StepRecorder {
       // Model calls made inside the body are attributed to this step.
       const work = this.scope.run(record, () => withAiTraceStep(record.api, record.label, body));
       const result = await (signal === undefined ? work : withAbort(work, signal, () => new TestError('CANCELLED', `${record.api} cancelled`)));
-      if (this.abandoned.has(record.id)) return result;
+      if (step.abandoned) return result;
       record.durationMs = Date.now() - startedMs;
       if (options.verifies === true) this.lastVerified = Math.max(this.lastVerified, verifiesBefore);
       return result;
     } catch (thrown) {
       registerProviderKeys(process.env);
       // A step that failed on its own, or that another abort reached first, keeps that failure.
-      const name = this.named.get(record.id);
+      const name = step.named;
       const cause = name !== undefined && thrown === name.reason ? name.error : thrown;
       const failure = modelFailure(cause, this.redact ?? processSecrets.redact);
-      if (this.abandoned.has(record.id)) {
+      if (step.abandoned) {
         const rejection = failure ?? cause;
         markAbandonedRejection(rejection);
         throw rejection;
@@ -829,16 +834,10 @@ export class StepRecorder {
       if (this.redact !== undefined) redactErrorInPlace(error, this.redact);
       throw error;
     } finally {
-      this.running.delete(record.id);
-      this.pending.delete(record.id);
-      this.stacks.delete(record.id);
-      this.owners.delete(record.id);
-      this.named.delete(record.id);
+      this.active.delete(record.id);
       // An abandoned step reported its end when the body returned; what it did since is not the test's.
-      if (this.abandoned.delete(record.id)) {
-        this.seenScreens.delete(record.id);
-      } else {
-        this.settleScreen(record);
+      if (!step.abandoned) {
+        this.settleScreen(record, step.seenScreen);
         this.publishEnd(record);
       }
     }
@@ -860,9 +859,9 @@ export class StepRecorder {
     const held = [...this.held].map((call) => {
       this.held.delete(call);
       call.cancel.abort();
-      const record = this.open(call.kind, call.api, call.label, call.stack, call.options);
-      this.pending.set(record.id, call.promise);
-      return record;
+      const step = this.open(call.kind, call.api, call.label, call.stack, call.options);
+      step.pending = call.promise;
+      return step;
     });
     // A pause doesn't record a step, so it's cancelled here.
     const pauses = [...this.pauses];
@@ -871,7 +870,7 @@ export class StepRecorder {
       pause.cancel.abort();
       this.abandonedPromises.push(pause.promise);
     }
-    const running = this.steps.filter((step) => this.running.has(step.id) && !this.abandoned.has(step.id));
+    const running = [...this.active.values()].filter((step) => step.abandoned === undefined);
     const count = running.length + pauses.length;
     const [pause] = pauses;
     let first: TestError | undefined;
@@ -884,32 +883,26 @@ export class StepRecorder {
       relocateStack(first, pause.stack);
     }
     for (const step of running) {
+      const { record } = step;
       const more = first === undefined && count > 1 ? ` and ${count - 1} more` : '';
       const error = new TestError(
         'STEP_NOT_AWAITED',
-        withHint(`${this.owners.get(step.id) ?? this.owner} returned before ${callName(step)}${more} finished`, 'put `await` in front of every step call'),
+        withHint(`${step.owner} returned before ${callName(record)}${more} finished`, 'put `await` in front of every step call'),
       );
-      relocateStack(error, this.stacks.get(step.id));
+      relocateStack(error, step.stack);
       first ??= error;
-      this.abandoned.add(step.id);
-      step.status = 'failed';
-      step.durationMs = Math.max(0, Date.now() - Date.parse(step.startedAt));
-      step.error = serializeError(error, { projectRoot: this.projectRoot, redact: this.redact });
-      const promise = this.pending.get(step.id);
-      if (promise !== undefined) {
-        promise.catch(() => undefined);
-        this.abandonedPromises.push(promise);
+      step.abandoned = true;
+      record.status = 'failed';
+      record.durationMs = Math.max(0, Date.now() - Date.parse(record.startedAt));
+      record.error = serializeError(error, { projectRoot: this.projectRoot, redact: this.redact });
+      if (step.pending !== undefined) {
+        step.pending.catch(() => undefined);
+        this.abandonedPromises.push(step.pending);
       }
-      this.publishEnd(step);
+      this.publishEnd(record);
     }
     // No body runs for a held step, so nothing else ends what it started.
-    for (const record of held) {
-      this.running.delete(record.id);
-      this.abandoned.delete(record.id);
-      this.pending.delete(record.id);
-      this.stacks.delete(record.id);
-      this.owners.delete(record.id);
-    }
+    for (const { record } of held) this.active.delete(record.id);
     return first;
   }
 
@@ -922,11 +915,10 @@ export class StepRecorder {
    * calls it cut are its own to handle.
    */
   nameRunning(reason: Error, error: (call: string) => Error): void {
-    for (const step of this.steps) {
-      if (!this.running.has(step.id)) continue;
-      const named = error(callName(step));
-      relocateStack(named, this.stacks.get(step.id));
-      this.named.set(step.id, { reason, error: named });
+    for (const step of this.active.values()) {
+      const named = error(callName(step.record));
+      relocateStack(named, step.stack);
+      step.named = { reason, error: named };
     }
   }
 
@@ -1007,15 +999,13 @@ export class StepRecorder {
    * failure evidence, a launch) is the trace's only through the screen at failure.
    */
   recordScreen(read: () => ScreenText | undefined): void {
-    const target = this.current();
-    if (target !== undefined) this.seenScreens.set(target.id, read);
+    const step = this.currentStep();
+    if (step !== undefined) step.seenScreen = read;
   }
 
   /** Compares the last screen a step saw with the one before it, once the step has ended. */
-  private settleScreen(record: StepRecord): void {
-    const read = this.seenScreens.get(record.id);
+  private settleScreen(record: StepRecord, read: (() => ScreenText | undefined) | undefined): void {
     if (read === undefined) return;
-    this.seenScreens.delete(record.id);
     let screen: ScreenText | undefined;
     try {
       screen = read();
@@ -1099,7 +1089,7 @@ export class StepRecorder {
 
   /** Steps of the test's own session whose execution has finished, e.g. as prior-step prompt context. */
   completed(): readonly StepRecord[] {
-    return this.steps.filter((step) => isOwnStep(step) && !this.running.has(step.id));
+    return this.steps.filter((step) => isOwnStep(step) && !this.active.has(step.id));
   }
 
   /**
@@ -1140,9 +1130,15 @@ export class StepRecorder {
     return this.steps.findLast(isOwnStep);
   }
 
-  private current(): StepRecord | undefined {
+  /** The step whose body this call runs inside, unless it ended or was abandoned. */
+  private currentStep(): ActiveStep | undefined {
     const record = this.scope.getStore();
-    return record !== undefined && this.running.has(record.id) && !this.abandoned.has(record.id) ? record : undefined;
+    const step = record === undefined ? undefined : this.active.get(record.id);
+    return step?.abandoned === undefined ? step : undefined;
+  }
+
+  private current(): StepRecord | undefined {
+    return this.currentStep()?.record;
   }
 
   /** Publishes a phase with the owning record's identity, including nested and finishing steps. */
