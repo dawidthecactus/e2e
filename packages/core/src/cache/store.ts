@@ -164,8 +164,10 @@ export class FileCacheStore implements CacheStore {
       const replaced = recordings.find((recording) => recording.keyHash === keyHash || sameSlot(recording));
       const recording: StoredRecording = {
         keyHash,
-        // A recording rewritten under its own key (its provenance completed) keeps the time it was made.
-        createdAt: replaced?.keyHash === keyHash ? replaced.createdAt : timestamp(),
+        // A recording rewritten under its own key with the same flow (its provenance completed) keeps the
+        // time it was made; a new flow under the key is a new recording.
+        createdAt:
+          replaced?.keyHash === keyHash && canonicalJson(replayed(replaced.trace)) === canonicalJson(replayed(payload)) ? replaced.createdAt : timestamp(),
         trace: wholeSeconds(payload),
       };
       const index = replaced === undefined ? -1 : recordings.indexOf(replaced);

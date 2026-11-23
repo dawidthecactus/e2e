@@ -151,6 +151,20 @@ describe('FileCacheStore', () => {
     expect(await readdir(directory)).toEqual([]);
   });
 
+  it('keeps the time a recording was made only while its flow is the same', async () => {
+    const { directory, store } = await makeStore();
+    const createdAt = async () => JSON.parse(await readFile(lockPath(directory), 'utf8')).entries[0].createdAt as string;
+    await store.write(KEY, payload());
+    const first = await createdAt();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Its provenance completed under the same key: the same recording.
+    await store.write(KEY, payload('web', { summary: 'upgraded the plan, confirmed' }));
+    expect(await createdAt()).toBe(first);
+    // A new flow under the same key (a live run of a step that has an entry): a new recording.
+    await store.write(KEY, payload('web', { startPath: '/billing', endPath: '/billing' }));
+    expect(await createdAt()).not.toBe(first);
+  });
+
   it('keeps one recording per step and target, replacing it whatever its key', async () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload());
