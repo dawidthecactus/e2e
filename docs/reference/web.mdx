@@ -264,8 +264,8 @@ A saved session carries it, not a shared browser.
 
 <Note>
 A persistent context does not support `headers`, `basicAuth`, `hasTouch`,
-`userAgent`, `locale`, `timezoneId` (see [Options](#options)), `app.clearState`, or
-session state capture and restore. `app.clearState` fails with
+`userAgent`, `locale`, `timezoneId` (see [Options](#options)),
+`app.clearState`, or session state capture and restore. `app.clearState` fails with
 `UNSUPPORTED_CAPABILITY`. `app.restart` remains available.
 </Note>
 
@@ -368,26 +368,27 @@ web({ testIdAttribute: 'data-test' }); // default: 'data-testid'
 
 #### `hasTouch`
 
-Touchscreen emulation in every attempt's context, as Playwright's `hasTouch`
-context option sets it, for an app with touch handlers.
+Touchscreen emulation in every attempt's context, for an app with touch
+handlers. It's the same as Playwright's `hasTouch` context option.
 
 ```ts
 web({ hasTouch: true }); // default: false
 ```
 
 - A `tap` on a node or at a point (`screen.tapAt`, `tap({ position })`) is
-  sent as `touchstart` and `touchend`. The browser follows with a click
-  unless the app cancels the touch.
-- On Chromium, a swipe along a path (`screen.swipe({ from, to })`) is sent as
-  `touchstart`, `touchmove`, and `touchend`. Without a `duration`, the swipe
-  is a fast flick, and a scrolling page can keep moving after it returns.
+  sent as `touchstart` and `touchend`, followed by a click unless the touch
+  is cancelled.
+- A swipe along a path (`screen.swipe({ from, to })`) is sent as
+  `touchstart`, `touchmove`, and `touchend` on Chromium. It's a fast flick
+  when `duration` isn't set, so a scrolling page can keep moving after the
+  call returns. Set `duration` for a slower swipe.
 - Other actions, such as `doubleTap`, `longPress`, and a directional swipe,
   are still sent as mouse and keyboard input.
 
 | Throws | When |
 | --- | --- |
 | `INVALID_CONFIG` | A value that is not a boolean. |
-| `UNSUPPORTED_CAPABILITY` | A swipe along a path in Firefox or WebKit, since neither can send touch moves. |
+| `UNSUPPORTED_CAPABILITY` | A swipe along a path in Firefox or WebKit, since touch moves can't be sent there. |
 
 #### `userAgent`
 
@@ -1288,13 +1289,16 @@ export interface WebOptions {
    */
   readonly testIdAttribute?: string;
   /**
-   * Set to `true` to emulate a touchscreen in every attempt's context, as
-   * Playwright's own `hasTouch` context option does, for an app with touch
-   * handlers. A `tap` is then sent as a touch instead of a click. A swipe
-   * along a path (`screen.swipe({ from, to })`) is sent as touch events on
-   * Chromium, and is `UNSUPPORTED_CAPABILITY` in Firefox and WebKit.
-   * Defaults to `false`. A persistent context (`connect.reconnectEndpoint`,
-   * or a provider with `scope: 'attempt'`) is `INVALID_CONFIG`.
+   * Set to `true` to emulate a touchscreen in every attempt's context, for an
+   * app with touch handlers. It's the same as Playwright's `hasTouch` context
+   * option. Defaults to `false`.
+   *
+   * - A `tap` is sent as a touch instead of a click.
+   * - A swipe along a path (`screen.swipe({ from, to })`) is sent as touch
+   *   events on Chromium. It's `UNSUPPORTED_CAPABILITY` in Firefox and WebKit.
+   *
+   * `hasTouch: true` on a persistent context (`connect.reconnectEndpoint`, or
+   * a provider with `scope: 'attempt'`) is `INVALID_CONFIG`.
    */
   readonly hasTouch?: boolean;
   /**

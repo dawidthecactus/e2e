@@ -1,4 +1,4 @@
-/** Touch emulation in a real Chromium: with `web({ hasTouch: true })`, a tap is sent as a touch and a swipe along a path as a finger drag. */
+/** Touch emulation in a real Chromium. A tap is sent as a touch and a swipe along a path as a finger drag when `web({ hasTouch: true })` is set. */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +14,7 @@ const LISTEN = `<script>
 
 const PAGE = `<button style="width:200px;height:100px">Go</button>${LISTEN}`;
 
-/** A checkbox with no box of its own, which the engine taps through its label. */
+/** A checkbox that doesn't show a box, so it's tapped through its label. */
 const LABELLED = `<label><input type="checkbox" style="position:absolute;opacity:0;width:0;height:0;margin:0">Accept</label>${LISTEN}`;
 
 const signal = new AbortController().signal;
@@ -23,7 +23,7 @@ const projectRoot = mkdtempSync(path.join(tmpdir(), 'e2e-touch-'));
 
 afterAll(() => rmSync(projectRoot, { recursive: true, force: true }));
 
-/** Runs `act` on a fresh page of a surface built with `hasTouch`, and returns the event types the page saw. */
+/** Runs `act` on a fresh page of a surface built with `hasTouch`, and returns the types of the events dispatched on the page. */
 async function eventsOf(hasTouch: boolean, act: (surface: PlaywrightSurface) => Promise<void>, content = PAGE): Promise<string[]> {
   const surface = new PlaywrightSurface({ hasTouch });
   try {
@@ -42,7 +42,7 @@ async function eventsOf(hasTouch: boolean, act: (surface: PlaywrightSurface) => 
   }
 }
 
-/** The first node of `role` in a tree, depth first. */
+/** Returns the first node of `role` in a tree, depth first. */
 function findRole(node: SemanticNode, role: string): SemanticNode | undefined {
   if (node.role === role) return node;
   for (const child of node.children ?? []) {
@@ -52,21 +52,21 @@ function findRole(node: SemanticNode, role: string): SemanticNode | undefined {
   return undefined;
 }
 
-/** Taps the first node of `role` an observation lists. */
+/** Taps the first node of `role` in an observation. */
 async function tapFirst(surface: PlaywrightSurface, role: string): Promise<void> {
   const node = findRole((await surface.observe(operation())).root, role);
-  if (node === undefined) throw new Error(`the observation lists no ${role}`);
+  if (node === undefined) throw new Error(`the observation doesn't have a ${role}`);
   await surface.perform(node.ref, { kind: 'tap' }, operation());
 }
 
 const tapButton = (surface: PlaywrightSurface) => tapFirst(surface, 'button');
 
 describe('web({ hasTouch })', () => {
-  it('taps a node with touch events, which the browser follows with a click', async () => {
+  it('taps a node with touch events followed by a click', async () => {
     expect(await eventsOf(true, tapButton)).toEqual(['touchstart', 'touchend', 'click']);
   });
 
-  it('taps a checkbox with no box through its label with touch events', async () => {
+  it("taps a checkbox that doesn't show a box through its label with touch events", async () => {
     expect(await eventsOf(true, (surface) => tapFirst(surface, 'checkbox'), LABELLED)).toEqual(['touchstart', 'touchend', 'click', 'click', 'checked']);
   });
 

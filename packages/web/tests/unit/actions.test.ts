@@ -492,7 +492,7 @@ describe('dispatchPointerAction', () => {
     expect(calls).toEqual(['touchStart 10,20', 'touchMove 60,20', 'touchMove 110,20', 'touchEnd', 'detach']);
   });
 
-  it('sends no touch when the operation is cancelled while the CDP session opens', async () => {
+  it("doesn't send a touch when the operation is cancelled while the CDP session opens", async () => {
     const { page, calls } = stubPage();
     const controller = new AbortController();
     controller.abort(new Error('cancelled'));
@@ -502,11 +502,11 @@ describe('dispatchPointerAction', () => {
     expect(calls).toEqual(['detach']);
   });
 
-  it.each(['firefox', 'webkit'] as const)('refuses a swipe along a path with a touchscreen on %s before any input', async (browser) => {
+  it.each(['firefox', 'webkit'] as const)('refuses a swipe along a path with a touchscreen on %s before sending any input', async (browser) => {
     const { page, calls } = stubPage();
     await expect(
       dispatchPointerAction(page, { x: 10, y: 20 }, { kind: 'swipeTo', target: { x: 110, y: 20 } }, undefined, browser),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY', message: expect.stringContaining(`${browser} cannot send touch moves`) });
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY', message: expect.stringContaining(`touch moves can't be sent in ${browser}`) });
     expect(calls).toEqual([]);
   });
 

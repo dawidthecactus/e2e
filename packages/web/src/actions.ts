@@ -280,8 +280,8 @@ function isFileInput(element: ElementHandle<Element>): Promise<boolean> {
 /**
  * Dispatches one deterministic locator action onto a Playwright target with the
  * platform's own actionability checks. `lookup` resolves the second ref of a
- * drag; everything else needs only the target. With `touch`, a tap is sent
- * as a touch instead of a click.
+ * drag. Everything else needs only the target. A tap is sent as a touch
+ * instead of a click when `touch` is set.
  */
 export async function dispatchLocatorAction(
   target: ActionTarget,
@@ -401,9 +401,9 @@ export async function dispatchLocatorAction(
  * Dispatches one pointer action at a viewport point with nothing resolved
  * behind it: no actionability wait, because there is no element to wait on,
  * and the page decides what the gesture lands on, as it does for a person.
- * `touch` is the browser's name when the context has a touchscreen. A tap is
- * then sent as a touch, and a swipe along a path as a finger drag, which only
- * Chromium can send.
+ * Pass the browser's name as `touch` when the context has a touchscreen. Then
+ * a tap is sent as a touch, and a swipe along a path as a finger drag
+ * (Chromium only).
  */
 export async function dispatchPointerAction(
   page: Page,
@@ -441,7 +441,7 @@ export async function dispatchPointerAction(
         return;
       }
       if (touch !== 'chromium') {
-        throw new EngineError('UNSUPPORTED_CAPABILITY', `a swipe along a path with web({ hasTouch: true }) needs chromium: ${touch} cannot send touch moves`, {
+        throw new EngineError('UNSUPPORTED_CAPABILITY', `a swipe along a path with web({ hasTouch: true }) is only supported in chromium (touch moves can't be sent in ${touch})`, {
           retryable: false,
         });
       }
