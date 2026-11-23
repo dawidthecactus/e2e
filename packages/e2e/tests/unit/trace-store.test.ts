@@ -269,7 +269,7 @@ describe('FileCacheStore', () => {
 
   it('names the file a test with a long id records into', async () => {
     const { directory, store } = await makeStore();
-    const longId = `tests/${'component/'.repeat(460)}pay.e2e.ts::pays`;
+    const longId = `tests/${'component/'.repeat(6_600)}pay.e2e.ts::pays`;
     // A recording keeps the test id cut to its bound, and the store names the file from that.
     await store.write(KEY, payload('web', { recordedFor: step('web', { testId: bound(longId, MAX_TRACE_TEST_ID_CHARS) }) }));
     const written = (await readdir(directory)).find((name) => name.endsWith('.yml'));

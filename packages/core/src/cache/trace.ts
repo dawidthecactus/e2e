@@ -35,11 +35,13 @@ export const MAX_TRACE_DESCRIPTOR_CHARS = 300;
 
 /**
  * Cap on the test id an entry keeps. The id is the test file's path and its
- * titles, percent-encoded, so a test titled in Japanese or Korean runs past
- * the descriptor cap; the file store names and groups a test's recordings by
- * it, and two tests must not meet in one cut.
+ * titles, percent-encoded: a title of up to 512 UTF-8 bytes can take 1,536
+ * characters, so a test titled in Japanese or Korean, a few `describe`s
+ * deep, runs far past the descriptor cap. The file store names and groups a
+ * test's recordings by it, and two tests must not meet in one cut; this
+ * holds dozens of such titles.
  */
-export const MAX_TRACE_TEST_ID_CHARS = 4_096;
+export const MAX_TRACE_TEST_ID_CHARS = 65_536;
 
 /**
  * Cap on verbatim replay inputs (typed text, URLs, option labels). Inputs are
