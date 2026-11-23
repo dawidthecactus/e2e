@@ -244,7 +244,7 @@ recording file beside it.
 | --- | --- | --- |
 | `no-entry` | No recording matches this step and its params. | The next verified pass records it, unless the step's `step.cache.write` is `no-change`. |
 | `retry` | Retries never replay, except under `--strict-cache` or `cache.strict`. | Nothing. |
-| `invalid-entry` | The test's recording file is unreadable (a merge conflict in its lock, say), over 1 MiB, or was edited so it no longer matches its lock. A run doesn't rewrite a file with a recording it can't read, so the test records nothing until you fix it. | Undo the edit, or delete the test's `.yml` and `.lock.json`. `npx e2e cache ls` names the file and what's wrong. |
+| `invalid-entry` | The test's recording file is unreadable (a merge conflict in its lock, say), over 1 MiB, or was edited so it no longer matches its lock. A run doesn't rewrite a file with a recording it can't read, or with a YAML recording its lock has no entry for, so the test records nothing until you fix it. | Undo the edit, or delete the test's `.yml` and `.lock.json`. `npx e2e cache ls` names the file and what's wrong. |
 | `truncated` | The recording hit a limit, see [below](#limits-and-gaps). | Split the step, or pass the secret as a `Secret`. |
 | `wrong-context` | The app was on another route than when the step was recorded. See [How a replay works](#how-a-replay-works). | Open the same screen before the step. |
 | `target-not-found` | A recorded control did not appear within 15 seconds, or it has no name and no named container to tell it from its twins. | The UI changed: the next passing run records it again. For an unnamed control, give it a label or put it in a named row or group. |
@@ -342,7 +342,9 @@ steps:
 - A step whose instruction or params change is a new step. The old step's
   recording stays in the file until you delete that step from the YAML. A
   step deleted from the YAML isn't replayed, and the next run that records
-  drops its lock entry.
+  drops its lock entry. Deleting the whole YAML drops every recording of
+  the test; deleting only the lock leaves the YAML unreadable, so delete
+  both.
 - Review the YAML, but don't edit it. Each lock entry holds a digest of its
   recording as written, so an edited recording reads as `invalid-entry`;
   record the step again instead. Moving steps around, or merging two
