@@ -457,14 +457,20 @@ function findEntry(file: ListedRecordingFile, keyHash: string): CacheReadResult 
 
 /**
  * Why a pair holds something a rewrite for `keyHash` would drop: the pair
- * does not read, or one of its recordings under another key does not.
+ * does not read, one of its recordings under another key does not, or the
+ * YAML shows a recording no lock entry claims.
  * Undefined when a rewrite keeps everything else in it.
  */
 function unreadable(file: ListedRecordingFile, keyHash: string): string | undefined {
   const { parsed } = file;
   if (parsed.status === 'invalid') return parsed.reason;
   const recording = parsed.recordings.find((candidate) => candidate.status === 'invalid' && candidate.keyHash !== keyHash);
-  return recording?.status === 'invalid' ? `${file.name}${RECORDING_EXTENSION}: ${recording.reason}` : undefined;
+  if (recording?.status === 'invalid') return `${file.name}${RECORDING_EXTENSION}: ${recording.reason}`;
+  // A YAML recording no lock entry claims (a write cut short, a merge resolved in one file only) goes too,
+  // unless it is this key's own recording, edited: recording the key again is how that is repaired.
+  const ownEdited = parsed.recordings.some((candidate) => candidate.status === 'invalid' && candidate.keyHash === keyHash);
+  const stray = parsed.unclaimed.slice(ownEdited ? 1 : 0);
+  return stray.length === 0 ? undefined : `${file.name}${RECORDING_EXTENSION}: ${stray[0]} has no entry in the lock file`;
 }
 
 /**

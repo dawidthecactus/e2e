@@ -454,6 +454,19 @@ describe('FileCacheStore', () => {
     });
   });
 
+  it('keeps a YAML recording no lock entry claims when another step records', async () => {
+    const { directory, store } = await makeStore();
+    const named = (instruction: string) => step('web', { instruction, instructionDigest: instructionDigest(instruction) });
+    await store.write(KEY, payload('web', { recordedFor: named('open the cart') }));
+    const lockBefore = await readFile(lockPath(directory), 'utf8');
+    await store.write(OTHER_KEY, payload('web', { recordedFor: named('check out') }));
+    // A write cut short after its YAML: the new step is in the YAML, not in the lock.
+    await writeFile(lockPath(directory), lockBefore, 'utf8');
+    const yaml = await readFile(yamlPath(directory), 'utf8');
+    expect(await store.write('c'.repeat(64), payload('web', { recordedFor: named('pay') }))).toBeUndefined();
+    expect(await readFile(yamlPath(directory), 'utf8')).toBe(yaml);
+  });
+
   it('reads a lock whose YAML was deleted as holding nothing, and records over it', async () => {
     const { directory, store } = await makeStore();
     await store.write(KEY, payload());
