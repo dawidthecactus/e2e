@@ -14,10 +14,29 @@ import { promisify } from 'node:util';
 import { registerProviderKey } from 'e2e/agent';
 import { ConfigurationError } from 'e2e/engine';
 import { z } from 'zod';
-import { agentEnvironment, mergeCodexAuthEnvironment, normalizeCodexAuthEnvironment, type AgentLaunch } from './session.ts';
+import { agentEnvironment, type AgentLaunch } from './session.ts';
 import type { AcpAgentOptions } from './types.ts';
 
 const execFileAsync = promisify(execFile);
+
+/** Windows treats these four Codex authentication variable names case-insensitively. */
+const CODEX_AUTH_ENV_NAMES = new Set(['CODEX_API_KEY', 'OPENAI_API_KEY', 'DEFAULT_AUTH_REQUEST', 'APP_SERVER_LOGS']);
+
+/** Normalize explicit Codex auth overrides before choosing the sign-in request. */
+function normalizeCodexAuthEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {
+  if (process.platform !== 'win32') return { ...env };
+  const normalized: Record<string, string> = {};
+  // Node chooses the first spelling in lexicographic order on Windows.
+  for (const name of Object.keys(env).toSorted()) {
+    const upper = name.toUpperCase();
+    if (CODEX_AUTH_ENV_NAMES.has(upper)) {
+      if (!Object.hasOwn(normalized, upper)) normalized[upper] = env[name]!;
+    } else {
+      normalized[name] = env[name]!;
+    }
+  }
+  return normalized;
+}
 
 /** What `codex mcp list --json` prints, as far as the preset reads it. */
 const CodexServerList = z.array(z.object({ name: z.string() }));
@@ -272,7 +291,7 @@ async function codexServers(adapter: string, env: Readonly<Record<string, string
       : [codexPath, []];
   try {
     const { stdout } = await execFileAsync(command, [...args, 'mcp', 'list', '--json'], {
-      env: agentEnvironment(mergeCodexAuthEnvironment(process.env, env)),
+      env: agentEnvironment({ ...process.env, ...env }),
       timeout: 30_000,
     });
     return CodexServerList.parse(JSON.parse(stdout)).map((server) => server.name);

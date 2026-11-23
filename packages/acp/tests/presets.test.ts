@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { redactSecrets, registerProviderKey } from 'e2e/agent';
 import { acp, claudeCode, codex } from '../src/index.ts';
 import { codexLaunch } from '../src/presets.ts';
-import { mergeCodexAuthEnvironment, normalizeCodexAuthEnvironment } from '../src/session.ts';
 
 const AGENT = fileURLToPath(new URL('./fixtures/scripted-agent.ts', import.meta.url));
 const pass = { call: 'complete_step', args: { status: 'passed', summary: 'done' } };
@@ -167,74 +165,47 @@ describe('agent presets', () => {
   /** The request the preset sends: the method alone, never the key. */
   const API_KEY_LOGIN = logged('{"methodId":"api-key"}');
 
-  it('normalizes duplicate Windows auth spellings using Node lexical precedence', () => {
-    const supplied = {
-      cOdEx_ApI_kEy: 'later',
-      CODEX_API_KEY: 'first',
-      openai_api_key: 'later',
-      OPENAI_API_KEY: '',
-      default_auth_request: '',
-      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
-      App_Server_Logs: 'later',
-      APP_SERVER_LOGS: '',
-      ACP_LOG: 'keep-other-vars-unchanged',
-    };
-    const normalized = normalizeCodexAuthEnvironment(supplied, 'win32');
-    expect(normalized).toEqual({
-      CODEX_API_KEY: 'first',
-      OPENAI_API_KEY: '',
-      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
-      APP_SERVER_LOGS: '',
-      ACP_LOG: 'keep-other-vars-unchanged',
-    });
-    expect(normalizeCodexAuthEnvironment({ oPeNaI_aPi_KeY: 'mixed' }, 'win32')).toEqual({ OPENAI_API_KEY: 'mixed' });
-    expect(normalizeCodexAuthEnvironment(normalized, 'win32')).toEqual(normalized);
-  });
+  it('honors Windows auth overrides through codexLaunch, including blank values and duplicate spellings', async () => {
+    cleanAuthEnv();
+    vi.stubEnv('OPENAI_API_KEY', 'inherited-openai');
+    vi.stubEnv('DEFAULT_AUTH_REQUEST', '{"methodId":"chat-gpt"}');
+    vi.stubEnv('APP_SERVER_LOGS', 'inherited-log');
+    vi.stubEnv('CODEX_PATH', undefined);
 
-  it('prefers explicit Windows overrides over inherited values, including blanks', () => {
-    const inherited = {
-      CODEX_API_KEY: 'inherited-codex',
-      OPENAI_API_KEY: 'inherited-openai',
-      DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}',
-      APP_SERVER_LOGS: 'inherited-log',
-    };
-    const overrides = { codex_api_key: 'configured', openai_api_key: '', default_auth_request: '', app_server_logs: 'new-log' };
-    expect(mergeCodexAuthEnvironment(inherited, overrides, 'win32')).toEqual({
-      CODEX_API_KEY: 'configured',
-      OPENAI_API_KEY: '',
-      DEFAULT_AUTH_REQUEST: '',
-      APP_SERVER_LOGS: 'new-log',
-    });
-    expect(mergeCodexAuthEnvironment(inherited, undefined, 'win32')).toEqual(inherited);
-  });
+    const directory = project(['@agentclientprotocol/codex-acp']);
+    // codexServers uses the adapter's Node-based Codex CLI by default.
+    // Provide a test-only CLI so this test also runs on Windows without a shell script.
+    const codexPackage = join(directory, 'node_modules', '@agentclientprotocol', 'codex-acp', 'node_modules', '@openai', 'codex');
+    mkdirSync(join(codexPackage, 'bin'), { recursive: true });
+    writeFileSync(join(codexPackage, 'package.json'), JSON.stringify({ name: '@openai/codex', exports: { './bin/codex.js': './bin/codex.js' } }));
+    writeFileSync(join(codexPackage, 'bin', 'codex.js'), "process.stdout.write('[]');\n");
 
-  it('preserves case-sensitive auth variables on POSIX platforms', () => {
-    const supplied = { OPENAI_API_KEY: 'upper', openai_api_key: 'lower', DEFAULT_AUTH_REQUEST: 'upper', default_auth_request: '' };
-    expect(normalizeCodexAuthEnvironment(supplied, 'linux')).toEqual(supplied);
-    expect(normalizeCodexAuthEnvironment(supplied, 'darwin')).toEqual(supplied);
-    expect(mergeCodexAuthEnvironment({ OPENAI_API_KEY: 'inherited' }, { openai_api_key: 'override' }, 'linux')).toEqual({
-      OPENAI_API_KEY: 'inherited', openai_api_key: 'override',
-    });
-  });
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    try {
+      Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
 
-  it.skipIf(process.platform !== 'win32')('passes canonical Codex auth values to a real Windows child process', () => {
-    const env = mergeCodexAuthEnvironment(
-      { ...process.env, OPENAI_API_KEY: 'inherited-test-value', DEFAULT_AUTH_REQUEST: '{"methodId":"api-key"}' },
-      { openai_api_key: 'override-test-value', default_auth_request: '' },
-    );
-    const script = `process.stdout.write(JSON.stringify({
-      apiKey: process.env.OPENAI_API_KEY,
-      request: process.env.DEFAULT_AUTH_REQUEST,
-      spellings: Object.keys(process.env).filter((key) => key.toUpperCase() === 'OPENAI_API_KEY'),
-    }))`;
-    const output = execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' });
-    expect(JSON.parse(output)).toEqual({
-      apiKey: 'override-test-value',
-      request: '',
-      spellings: ['OPENAI_API_KEY'],
-    });
-  });
+      const blank = await inProject(directory, () => codexLaunch({
+        env: { openai_api_key: '', default_auth_request: '', app_server_logs: '' },
+      }))();
+      expect(blank.env).toMatchObject({ OPENAI_API_KEY: '', DEFAULT_AUTH_REQUEST: '', APP_SERVER_LOGS: '' });
+      expect(blank.env).not.toHaveProperty('openai_api_key');
+      expect(blank.env).not.toHaveProperty('default_auth_request');
+      expect(blank.env).not.toHaveProperty('app_server_logs');
 
+      const configured = await inProject(directory, () => codexLaunch({
+        env: { openai_api_key: 'configured-openai', default_auth_request: '', app_server_logs: '' },
+      }))();
+      expect(configured.env?.['OPENAI_API_KEY']).toBe('configured-openai');
+      expect(configured.env?.['DEFAULT_AUTH_REQUEST']).toBe('{"methodId":"api-key"}');
+
+      const duplicate = await inProject(directory, () => codexLaunch({
+        env: { openai_api_key: 'lower-spelling', OPENAI_API_KEY: 'upper-spelling', default_auth_request: '', app_server_logs: '' },
+      }))();
+      expect(duplicate.env?.['OPENAI_API_KEY']).toBe('upper-spelling');
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  });
 
   it('registers the key from a custom Codex API-key request while preserving its exact text', async () => {
     cleanAuthEnv();
