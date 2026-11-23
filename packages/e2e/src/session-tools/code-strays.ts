@@ -27,17 +27,17 @@ export function asRunCodeCall<T>(tell: (cause: unknown) => void, body: () => T):
 /**
  * Takes an error nothing in the process caught when a `run_code` call's code
  * made it: the call fails with it while it runs. One that came after the call
- * ended goes to `warn` for the operator; a host with no `warn` keeps it, as
- * anything the code started and left, a connection included, carries the
- * call's context too. False for an error from anywhere else.
+ * ended goes to `warn` for the operator, and the process goes on: there is
+ * no call left to fail, and the session or the held test is not the code's
+ * to end. False for an error from anywhere else.
  */
-export function claimRunCodeStray(cause: unknown, warn?: (message: string) => void): boolean {
+export function claimRunCodeStray(cause: unknown, warn: (message: string) => void): boolean {
   const call = calls.getStore();
   if (call === undefined) return false;
   if (call.tell !== undefined) {
     call.tell(cause);
     return true;
   }
-  warn?.(`code a run_code call left running failed after the call ended: ${classifyError(cause).message}`);
-  return warn !== undefined;
+  warn(`code a run_code call left running failed after the call ended: ${classifyError(cause).message}`);
+  return true;
 }

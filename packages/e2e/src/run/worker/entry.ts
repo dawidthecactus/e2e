@@ -243,7 +243,8 @@ function main(): void {
   process.on('SIGINT', () => undefined);
   process.on('SIGTERM', () => undefined);
   // Code an attached session runs on a held test is not the test: what it throws outside its call fails that call, not the attempt.
-  const fromRunCode = (cause: unknown): boolean => claimRunCodeStray(cause);
+  // After its call ended there is nobody to fail: it is said on stderr, which is redacted like the test's output, and the test goes on.
+  const fromRunCode = (cause: unknown): boolean => claimRunCodeStray(cause, (message) => void process.stderr.write(`e2e: [warning] ${message}\n`));
   process.on('uncaughtException', (cause) => {
     if (!fromRunCode(cause)) fatal(cause);
   });

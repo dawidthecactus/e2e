@@ -26,6 +26,7 @@ import { createScreenContext } from '@e2e-dev/core/lib/run/fixtures';
 import type { StandaloneAttempt } from '@e2e-dev/core/lib/run/standalone-attempt';
 import { credentialIn, secretIn } from '@e2e-dev/core/lib/secrets';
 import type { Credentials, Secrets } from '@e2e-dev/core/lib/types';
+import { soften, SoftFailures } from '@e2e-dev/core/lib/expect/soft';
 import { expect } from '../expect/index.ts';
 import { Recorder, type Outcome } from './code-recorder.ts';
 import { asRunCodeCall } from './code-strays.ts';
@@ -79,6 +80,8 @@ interface Ended {
   readonly value: unknown;
   readonly error: { readonly code: string | undefined; readonly message: string } | undefined;
   readonly logs: readonly string[];
+  /** What the call itself has to say about how the code ran, apart from what the code logged. */
+  readonly notes: readonly string[];
 }
 
 /** What `run_code`'s code may call, as the session's opening and the tool's description both spell it. */
@@ -124,7 +127,7 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
       "const rows = screen.getByRole('listitem'); const prices = (await rows.allTextContents()).map((text) => Number(text.match(/\\$([\\d.]+)/)[1])); return { prices, sorted: prices.every((price, i) => i === 0 || prices[i - 1] <= price) };",
       'return a JSON value to get it back; console.log lines come back too. The result lists each test line the code ran, then what changed on screen.',
       ...runCodeApi(options),
-      `Actions and matchers wait like a test: on screen each waits at most timeout ms (default ${String(RUN_CODE_TIMEOUT_MS)}), so a loop rarely needs a sleep.`,
+      `Actions and matchers wait like a test: on screen each waits timeout ms by default (${String(RUN_CODE_TIMEOUT_MS)}), and a timeout in a line's own options replaces it, so a loop rarely needs a sleep.`,
       'A line that fails throws the error a test gets, whose code is the runner code (LOCATOR_NOT_FOUND, ASSERTION_FAILED, ...); uncaught, it stops the code and the app stays where it is. Await each line: a failure nothing awaited fails the call.',
       "Lines that pass, except reads, join test_lines' draft in the order they ran.",
       'The result shows <secret:name> where a configured secret value is.',
@@ -137,7 +140,7 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
         .min(1)
         .max(MAX_TIMEOUT_MS)
         .optional()
-        .describe(`How long each action or matcher on screen may wait, in milliseconds; default ${String(RUN_CODE_TIMEOUT_MS)}`),
+        .describe(`How long each action or matcher on screen waits by default, in milliseconds; default ${String(RUN_CODE_TIMEOUT_MS)}`),
     }).strict(),
     execute: (args: RunCodeArgs, call: ToolExecutionOptions<unknown>) => runCode(options, args, call.abortSignal, nextHandle),
     toModelOutput: ({ output }: { readonly output: RunCodeResult }) => ({ type: output.failed ? ('error-text' as const) : ('text' as const), value: output.text }),
@@ -148,11 +151,15 @@ export function runCodeTool(options: RunCodeOptions): ToolSet[string] {
 async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: AbortSignal | undefined, nextHandle: () => number): Promise<RunCodeResult> {
   const attempt = options.attempt(signal);
   const redact = attempt.agentRuntime.redact;
-  const recorder = new Recorder(redact, nextHandle);
+  // As the single actions draft a typed username: by the credential's name, so the test follows the environment's account.
+  const usernames = new Map([...attempt.agentRuntime.config.credentials].map(([name, credential]) => [credential.username, `credentials.user('${name.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}').username`]));
+  const recorder = new Recorder(redact, nextHandle, (text) => usernames.get(text));
   const logs: string[] = [];
-  const stray: unknown[] = [];
+  // Kept with its wrapper: a promise may reject with nothing at all.
+  const stray: { readonly cause: unknown }[] = [];
+  const soft = new SoftFailures();
   const plain = (value: unknown): unknown => redacted(value, redact, (item) => recorder.textOf(item));
-  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder), console: logging(logs, plain) };
+  const scope = { ...objects(options, attempt, args.timeout ?? RUN_CODE_TIMEOUT_MS, recorder, soft), console: logging(logs, plain) };
   // Aborted when the call ends the code itself, at its timeout or an error nothing caught; with the caller's cancel it is what ends the operation the code is in the middle of.
   const stop = new AbortController();
   const cut = signal === undefined ? stop.signal : AbortSignal.any([signal, stop.signal]);
@@ -167,7 +174,7 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
     const body = compile(args.code, Object.keys(scope));
     const call = asRunCodeCall(
       (cause) => {
-        stray.push(cause);
+        stray.push({ cause });
         strayed(cause);
       },
       () => body(scope),
@@ -186,16 +193,17 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
     value = await attempt.budget.capped(PROGRAM_TIMEOUT_MS, () => withTimeout(run(), PROGRAM_TIMEOUT_MS, timedOut), cut);
   } catch (cause) {
     thrown = { cause };
-    if (stray[0] === cause) stop.abort();
+    if (stray.length > 0 && stray[0]?.cause === cause) stop.abort();
   }
   // A promise the code left rejected in its last turn is reported once that turn is over.
   await new Promise((resolve) => setImmediate(resolve));
   const { unawaited, lost } = await recorder.end(cut);
   end();
-  if (unawaited > 0) logs.push(`${String(unawaited)} call(s) on the app were not awaited when the code ended; they ran, but await each one so a failure stops the code.`);
+  const notes = unawaited === 0 ? [] : [`Note: ${String(unawaited)} call(s) on the app were not awaited when the code ended. Lines without await start together and do not run in order; await each one.`];
+  const softened = soft.close();
   // What the code threw first; then a failure it never waited on, which reached nothing in it.
-  const failure = thrown ?? [lost, ...stray].flatMap((cause) => (cause === undefined ? [] : [{ cause }]))[0];
-  const ended: Ended = { value: failure === undefined ? plain(value) : undefined, error: failure === undefined ? undefined : describe(failure.cause, Object.keys(scope)), logs };
+  const failure = thrown ?? lost ?? stray[0] ?? (softened === undefined ? undefined : { cause: softened });
+  const ended: Ended = { value: failure === undefined ? plain(value) : undefined, error: failure === undefined ? undefined : describe(failure.cause, Object.keys(scope)), logs, notes };
   const { outcomes } = recorder;
   if (ended.error !== undefined) options.onFailed?.(ended.error.code ?? 'ERROR');
   options.record?.(outcomes.flatMap((outcome) => ('error' in outcome || outcome.read ? [] : [outcome.source])));
@@ -214,7 +222,7 @@ async function runCode(options: RunCodeOptions, args: RunCodeArgs, signal: Abort
  * attempt's own whose lines wait at most `timeout`, and `expect`,
  * `credentials`, and `secrets` as a test imports them.
  */
-function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: number, recorder: Recorder): Record<string, unknown> {
+function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: number, recorder: Recorder, soft: SoftFailures): Record<string, unknown> {
   const runtime = attempt.agentRuntime;
   const { config } = runtime;
   const screen = createScreen(
@@ -233,7 +241,9 @@ function objects(options: RunCodeSession, attempt: RunCodeAttempt, timeout: numb
   // The session's own config, not the registry the process holds: with several sessions open that is the newest one's.
   const credentials: Credentials = { user: (name) => credentialIn(config, name) };
   const secrets: Secrets = { get: (name) => secretIn(config, name) };
-  const real: Record<string, unknown> = { screen, app: attempt.fixtures.app, expect, credentials, secrets };
+  // A soft failure is the call's, not the attempt's: on a held test the attempt's own would fail the test once it goes on.
+  const softly = (actual: unknown, message?: string): unknown => soften(Reflect.apply(expect, undefined, [actual, message]) as object, soft);
+  const real: Record<string, unknown> = { screen, app: attempt.fixtures.app, expect: Object.assign((actual: unknown, message?: string): unknown => Reflect.apply(expect, undefined, [actual, message]), expect, { soft: softly }), credentials, secrets };
   for (const name of fixtureNames(options)) real[name] = Reflect.get(attempt.fixtures, name);
   return Object.fromEntries(
     Object.entries(real).map(([name, value]) => [name, (typeof value === 'object' || typeof value === 'function') && value !== null ? recorder.wrap(value, name) : value]),
@@ -269,7 +279,10 @@ function compile(code: string, names: readonly string[]): (scope: Record<string,
     return new AsyncFunction('__scope', `${head}\n${code}`);
   } catch (cause) {
     if (!(cause instanceof SyntaxError)) throw cause;
-    throw new TestError('INVALID_ARGUMENT', `run_code: the code does not parse${syntaxLine(`async (__scope) => { ${head}\n${code}\n}`)}: ${cause.message}`);
+    // The scope's names are declared where the code runs, so the code cannot declare one again.
+    const declared = /^Identifier '(.+)' has already been declared$/.exec(cause.message)?.[1];
+    const hint = declared !== undefined && names.includes(declared) ? `; ${declared} is in scope already, so pick another name` : '';
+    throw new TestError('INVALID_ARGUMENT', `run_code: the code does not parse${syntaxLine(`async (__scope) => { ${head}\n${code}\n}`)}: ${cause.message}${hint}`);
   }
 }
 
@@ -340,6 +353,7 @@ function render(result: Ended, outcomes: readonly Outcome[], screen: string, red
     lines.push(result.value === undefined ? 'Ran; the code returned nothing.' : `Returned: ${show(result.value)}`);
   }
   if (result.logs.length > 0) lines.push('console:', ...result.logs.map((log) => indent(log)));
+  lines.push(...result.notes);
   const spoke = result.value !== undefined || result.logs.length > 0;
   const listed = spoke ? outcomes.filter((outcome) => 'error' in outcome || !outcome.read) : outcomes;
   const reads = outcomes.length - listed.length;

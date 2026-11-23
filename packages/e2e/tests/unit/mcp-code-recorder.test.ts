@@ -81,7 +81,7 @@ describe('run_code recorder', () => {
     const browser = recorder.wrap(
       Object.freeze({
         newTab: () => Promise.resolve(tab),
-        evaluate: (script: () => number) => Promise.resolve(script()),
+        evaluate: (script: () => number) => Promise.resolve(new Function(`return (${String(script)})()`)() as number),
         route: (pattern: string, handler: (value: number) => number) => {
           calls.push(handler(20));
           return Promise.resolve();
@@ -101,7 +101,8 @@ describe('run_code recorder', () => {
       'await newTab1.close();',
       // A value came back, but a function of the code ran for it, which may have changed the app.
       'await browser.evaluate(() => 41 + 1);',
-      "await browser.route('**', (value) => value + 1);",
+      // The server called this one, so in a test it needs the variables it used; the page script above was sent as text.
+      "await browser.route('**', (value) => value + 1); // the function brings none of the variables run_code declared: declare the ones it uses",
       "await browser.keyboard.press('Tab');",
     ]);
   });
@@ -116,11 +117,11 @@ describe('run_code recorder', () => {
     const early = recording();
     void early.wrap(fakeScreen(), 'screen').getByRole('button').missing();
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(await early.end(new AbortController().signal)).toMatchObject({ unawaited: 0, lost: { code: 'LOCATOR_NOT_FOUND' } });
+    expect(await early.end(new AbortController().signal)).toMatchObject({ unawaited: 0, lost: { cause: { code: 'LOCATOR_NOT_FOUND' } } });
 
     const late = recording();
     void late.wrap(fakeScreen(), 'screen').getByRole('button').missing();
-    expect(await late.end(new AbortController().signal)).toMatchObject({ unawaited: 1, lost: { code: 'LOCATOR_NOT_FOUND' } });
+    expect(await late.end(new AbortController().signal)).toMatchObject({ unawaited: 1, lost: { cause: { code: 'LOCATOR_NOT_FOUND' } } });
   });
 
   it('parks code that was cut off at its next await, with nothing to catch and spin on', async () => {
@@ -179,7 +180,13 @@ describe('run_code recorder', () => {
     const polled = recording();
     const page = polled.wrap({ poll: (read: () => Promise<string>) => read().then(() => undefined), text: () => Promise.resolve('text') }, 'screen');
     await page.poll(() => page.text());
-    expect(sources(polled.outcomes)).toEqual(['read: await screen.text();', 'await screen.poll(() => page.text());']);
+    expect(sources(polled.outcomes)).toEqual(['read: await screen.text();', 'await screen.poll(() => page.text()); // the function brings none of the variables run_code declared: declare the ones it uses']);
+  });
+
+  it("writes a credential's username by its name", async () => {
+    const recorder = new Recorder((text) => text, () => 1, (text) => (text === 'ada@example.com' ? "credentials.user('admin').username" : undefined));
+    await recorder.wrap(fakeScreen(), 'screen').getByRole('textbox').fill('ada@example.com');
+    expect(sources(recorder.outcomes)).toEqual(["await screen.getByRole('textbox').fill(credentials.user('admin').username);"]);
   });
 
   it('stops waiting on a line the code left when the call is cancelled', async () => {

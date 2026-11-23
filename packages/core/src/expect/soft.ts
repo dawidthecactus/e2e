@@ -62,17 +62,19 @@ function keepOrThrow(error: unknown, soft: SoftFailures | undefined): void {
  * the running attempt's soft failures. `.not` softens the same way. Methods
  * run against the real expectation, so nothing about how it is built matters
  * here: the value matchers, the locator matchers, and an engine fixture's
- * attached matchers all go through the one wrapper.
+ * attached matchers all go through the one wrapper. `into` keeps the
+ * failures somewhere else than the running attempt, for a caller that is not
+ * the test, such as `e2e mcp`'s `run_code` on a held one.
  */
-export function soften<E extends object>(expectation: E): E {
+export function soften<E extends object>(expectation: E, into?: SoftFailures): E {
   return new Proxy(expectation, {
     get(target, key) {
       const value: unknown = Reflect.get(target, key, target);
-      if (key === 'not' && typeof value === 'object' && value !== null) return soften(value);
+      if (key === 'not' && typeof value === 'object' && value !== null) return soften(value, into);
       if (typeof value !== 'function') return value;
       return (...args: unknown[]): unknown => {
         // An asynchronous matcher belongs to the attempt that called it, not a later session.
-        const soft = currentAttempt()?.soft;
+        const soft = into ?? currentAttempt()?.soft;
         let result: unknown;
         try {
           result = (value as (...args: unknown[]) => unknown).apply(target, args);

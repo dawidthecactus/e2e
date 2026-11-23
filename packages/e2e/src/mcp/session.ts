@@ -591,6 +591,9 @@ export class SessionHost {
       }
     }
     const base = live.target.app.base?.href;
+    if (path !== undefined && !live.step.context.target.verbs.has('navigate')) {
+      throw new ConfigurationError('INVALID_ARGUMENT', `open_session: path opens a page by navigating, and target "${live.target.name}"'s engine has no navigate`);
+    }
     if (base !== undefined && live.step.context.target.verbs.has('navigate')) {
       const url = path ?? base;
       try {

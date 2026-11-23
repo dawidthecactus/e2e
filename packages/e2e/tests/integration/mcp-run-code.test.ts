@@ -42,6 +42,7 @@ describe('e2e mcp run_code', { timeout: 120_000 }, () => {
   let app: FixtureApp;
   let project: FixtureProject;
   let client: Client;
+  let sessionId: string | undefined;
   /** Every text a tool returned, to check no secret value ever left the server. */
   const returned: string[] = [];
 
@@ -78,6 +79,7 @@ describe('e2e mcp run_code', { timeout: 120_000 }, () => {
     );
     const opened = await invoke('open_session');
     expect(opened.isError, opened.text).toBe(false);
+    sessionId = /Session (\S+) open/.exec(opened.text)?.[1];
     expect(opened.text).toMatch(/^- run_code \{code, timeout\?\}: JavaScript with loops, variables, and return values\. /m);
     expect(opened.text.match(/^- run_code /gm)).toHaveLength(1);
     expect(opened.text).toContain("fill(credentials.user('name').password)");
@@ -263,10 +265,40 @@ return { added: after - before, code, items };`,
     expect(wrong.text).toMatch(/^Failed: ASSERTION_FAILED: expected \[1,2\] to have length 3/);
   });
 
-  it('lets a line the code did not await finish, and says so', async () => {
+  it('lets a line the code did not await finish, says so apart from the console, and still shows a read', async () => {
     const result = await runCode("screen.getByRole('button', 'Increment').tap();\nreturn 'early';");
     expect(result.isError, result.text).toBe(false);
-    expect(result.text).toMatch(/^Returned: "early"\nconsole:\n {3}1 call\(s\) on the app were not awaited when the code ended; .*\nTest lines: 1\.\n1\. await screen\.getByRole\('button', 'Increment'\)\.tap\(\);\n/);
+    expect(result.text).toMatch(/^Returned: "early"\nNote: 1 call\(s\) on the app were not awaited when the code ended\. .*\nTest lines: 1\.\n1\. await screen\.getByRole\('button', 'Increment'\)\.tap\(\);\n/);
+    // A script of lines with no await: the note is not the code speaking, so the read still shows its value.
+    const flat = await runCode("app.open('/');\nscreen.getByRole('button', 'Increment').tap();\nscreen.getByRole('status', 'Counter').textContent();");
+    expect(flat.text, flat.text).toMatch(/^Ran; the code returned nothing\.\nNote: 3 call\(s\) /);
+    expect(flat.text).toMatch(/textContent\(\); -> "\d+"\n/);
+    expect(flat.text).not.toContain('console:');
+  });
+
+  it('keeps a soft failure for the end of the call, counts a rejection with no reason, and says why a scope name cannot be declared again', async () => {
+    const soft = await runCode("expect.soft(1).toBe(2);\nawait expect.soft(screen.getByRole('button', 'Nowhere')).toBeVisible();\nreturn 'went on';", 100);
+    expect(soft.isError, soft.text).toBe(true);
+    expect(soft.text).toMatch(/^Failed: ASSERTION_FAILED: 2 soft assertions failed/);
+    expect((await runCode('Promise.reject();\nreturn 1;')).isError).toBe(true);
+    const again = await runCode('const screen = 1;');
+    expect(again.text).toContain("Identifier 'screen' has already been declared; screen is in scope already, so pick another name");
+  });
+
+  it('gives an error to the session whose call made it, with another session running a call', async () => {
+    const second = /Session (\S+) open/.exec((await invoke('open_session')).text)?.[1];
+    expect(second).toBeDefined();
+    try {
+      const run = (session: string | undefined, code: string): Promise<ToolText> => invoke('call', { tool: 'run_code', session, args: { code } });
+      // The failing call starts first, so the calm one is the newest call when the error comes.
+      const failed = run(second, "setTimeout(() => { throw new Error('mine alone'); }, 150);\nawait new Promise((resolve) => setTimeout(resolve, 400));\nreturn 'never';");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const [calm, failing] = await Promise.all([run(sessionId, "await new Promise((resolve) => setTimeout(resolve, 400));\nreturn 'calm';"), failed]);
+      expect(calm.text, calm.text).toMatch(/^Returned: "calm"\n/);
+      expect(failing.text).toMatch(/^Failed: Error: mine alone/);
+    } finally {
+      await invoke('close_session', { session: second });
+    }
   });
 
   it('fails on a failure the code did not await, on a promise it left, and on what a timer callback throws', async () => {

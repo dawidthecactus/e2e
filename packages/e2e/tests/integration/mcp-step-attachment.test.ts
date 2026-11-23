@@ -645,6 +645,28 @@ ${CONFIG.replace('  video: true,', `  video: true,
     expect(report).not.toContain('Missing');
   });
 
+  it("keeps what attached run_code leaves behind out of the held test's verdict", async () => {
+    const dir = project(`await screen.pause(); ${STEP}`);
+    const held = await pause(dir);
+    const { client } = await mcp(dir);
+    await openSession(client, { attach: held.id });
+    const run = (code: string) => invoke(client, 'call', { tool: 'run_code', args: { code } });
+
+    // A soft failure is the call's, not the test's.
+    const soft = await run('expect.soft(1).toBe(2);');
+    expect(soft.isError, soft.text).toBe(true);
+    expect(soft.text).toContain('1 soft assertion failed');
+    // Thrown outside the code's own promise, while the call runs: the call fails.
+    const microtask = await run("queueMicrotask(() => { throw new Error('in a microtask'); });\nawait new Promise((resolve) => setTimeout(resolve, 100));");
+    expect(microtask.text).toContain('Error: in a microtask');
+    // Thrown after the call ended: nobody is left to fail, and the worker goes on.
+    expect((await run("setTimeout(() => { throw new Error('late'); }, 150);\nreturn 'returned';")).text).toContain('Returned: "returned"');
+    await sleep(400);
+
+    expect(e2e(dir, 'run', '--step', 'next').status).toBe(0);
+    expect(await held.exited).toBe(0);
+  });
+
   it('fills configured secrets only into authorized fields and redacts their values', async () => {
     const dir = project('await screen.pause();');
     const held = await pause(dir);

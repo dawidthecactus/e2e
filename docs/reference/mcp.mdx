@@ -269,7 +269,7 @@ call {tool: "run_code", args: {code: "const rows = screen.getByRole('listitem');
 | Input | Does |
 | --- | --- |
 | `code` | The body of an async function. `screen`, `app`, `expect`, `credentials`, `secrets`, `console`, and the engine's fixture (`browser` or `device`) are in scope. A session attached to a held test has no engine fixture. |
-| `timeout` | Optional. How long each action or matcher on `screen` may wait, in ms, 1 through 120000. Default `5000`. |
+| `timeout` | Optional. How long each action or matcher on `screen` waits by default, in ms, 1 through 120000. Default `5000`. |
 
 ```txt
 Returned: [12.5,18,24]
@@ -285,18 +285,28 @@ Test lines: 2, 1 read not listed.
 - A line that fails throws the error a test gets, with its `code`. Uncaught,
   it stops the code and the result is an error result. The app stays where
   the passing lines left it.
-- `await` each line. A failure nothing awaited fails the call. So does a
+- `await` each line. Lines without `await` start together and don't run in
+  order, so a read can finish before the tap above it. A failure nothing
+  awaited fails the call. So does a
   promise the code left to reject, and an error a `setTimeout` callback
   throws: the call ends there. An error a handler leaves after its call ended
   is a warning in the server's log.
+- Code still running after the call returns, such as an async function the
+  code started and didn't await, keeps acting on the app. Those actions are
+  not in the result or the draft.
+- `expect.soft` keeps its failures for the end of the call, which then fails
+  with them.
 - The result lists the lines that ran. A read shows its value there when the
   code returns nothing and logs nothing. Otherwise `return` the value.
 - The lines that pass, except reads, join the [`test_lines`](#test_lines)
   draft in the order they ran. A call that resolves with a value counts as a
   read, unless it passes a function, such as a page script for `evaluate`,
   which may change the page. An object a call resolves with, such as a new
-  tab, gets a `const` line that names it.
-- Each action or matcher on `screen` waits at most `timeout`. The config's
+  tab, gets a `const` line that names it. A line that passes a function is
+  drafted with the function's text and a comment: declare the variables it
+  uses in the test. A passing `expect(value)` leaves no line.
+- Each action or matcher on `screen` waits `timeout` by default. A `timeout`
+  in a line's own options replaces it. The config's
   [`actionTimeout`](/reference/config#actiontimeout) and
   [`assertionTimeout`](/reference/config#assertiontimeout) apply when
   shorter. `app` and the engine's fixture wait as they do in a test.

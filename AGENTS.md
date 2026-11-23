@@ -741,9 +741,11 @@ trees, on both platforms, without a device.
     config. The one exception is `e2e mcp`'s `run_code`, which runs a coding
     agent's JavaScript in the server's process with a test file's authority
     (`session-tools/run-code.ts`): that agent can already write a test and
-    run it. Its result passes the secret ledger, which replaces a secret's
-    exact value only, so the code of an MCP session can read a configured
-    secret the app shows: an accepted exception to the first invariant.
+    run it. The code can read every configured secret and credential (the
+    config file, the environment, the app) and fill one into whatever field
+    it likes. Its result passes the secret ledger, which replaces a secret's
+    exact value only: that prevents accidents and is not a boundary. An
+    accepted exception to the first invariant and to the fill rule above.
     App content, ledger text, and pixels are quoted as untrusted
     evidence with no policy authority.
   - Every navigation a test or the agent asks for (`app.open`,

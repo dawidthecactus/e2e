@@ -18,6 +18,9 @@ type Turn = 'running' | 'settled' | 'cut';
 
 /** How long a call that was cut off waits for the operation it was in the middle of, which was cancelled with it. */
 const CUT_GRACE_MS = 2_000;
+// A line made while another still runs was not written after it: a test that awaits them in turn would wait on the first alone.
+const ALONGSIDE = ' // ran while the line above was still running; a test needs them in one Promise.all';
+const CALLBACK = ' // the function brings none of the variables run_code declared: declare the ones it uses';
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const MAX_DEPTH = 50;
 
@@ -67,6 +70,9 @@ export class Recorder {
   private readonly sources = new WeakMap<object, string>();
   /** Each function of the code as the real objects hold it. */
   private readonly handlers = new WeakMap<object, object>();
+  /** The functions of the code a line was written with, and the ones an engine took as text. */
+  private readonly functions: object[] = [];
+  private readonly sentAsText = new WeakSet<object>();
   private readonly sent: Sent[] = [];
   private readonly pending = new Set<Sent>();
   private turn: Turn = 'running';
@@ -76,6 +82,8 @@ export class Recorder {
     private readonly redact: (text: string) => string,
     /** The next number for a name, counted by the session so two calls never declare the same one. */
     private readonly nextHandle: () => number,
+    /** How a test writes a string it does not spell out, such as a credential's username; a string has no identity, so it is known by its value. */
+    private readonly named: (text: string) => string | undefined = () => undefined,
   ) {}
 
   /** What became of each line that settled, in the order the code made them. */
@@ -120,7 +128,7 @@ export class Recorder {
    * what that calls later runs as it does in a test, unrecorded. Answers the
    * first failure nothing in the code was there to catch.
    */
-  async end(cut: AbortSignal): Promise<{ readonly unawaited: number; readonly lost: unknown }> {
+  async end(cut: AbortSignal): Promise<{ readonly unawaited: number; readonly lost: { readonly cause: unknown } | undefined }> {
     this.turn = cut.aborted ? 'cut' : 'settled';
     const unawaited = [...this.pending].filter((sent) => !sent.line.seen).length;
     const settled = (async (): Promise<void> => {
@@ -139,7 +147,7 @@ export class Recorder {
     }
     // A line the code waited on gave its failure to the code, which may have chosen to go on, as the loser of a race does.
     const lost = this.sent.find((sent) => sent.failed !== undefined && !sent.line.seen);
-    return { unawaited, lost: lost?.failed?.cause };
+    return { unawaited, lost: lost?.failed };
   }
 
   private member(real: object, key: string, text: string): unknown {
@@ -170,7 +178,8 @@ export class Recorder {
 
   private call(method: object, receiver: object | undefined, text: string, args: unknown[]): unknown {
     if (this.turn === 'cut') return PARKED;
-    const called = `${text}(${args.map((arg) => this.spell(arg, 0)).join(', ')})`;
+    const spelled = (line: boolean): string => `${text}(${args.map((arg) => this.spell(arg, 0, line)).join(', ')})`;
+    const called = spelled(false);
     const recording = this.turn === 'running';
     // Asked before the call runs: a line the call itself makes, as a poll's read is, does not run alongside it.
     const alongside = this.pending.size > 0;
@@ -182,13 +191,12 @@ export class Recorder {
       throw cause;
     }
     if (!isThenable(returned)) return this.given(returned, called);
-    return recording ? this.line(called, returned, text, args, alongside) : Promise.resolve(returned).then((value) => this.given(value, called));
+    // A line's own strings are written by name where a test has one; a step of a chain, such as the query that finds a field, keeps what it was given.
+    return recording ? this.line(spelled(true), returned, text, args, alongside ? ALONGSIDE : '') : Promise.resolve(returned).then((value) => this.given(value, called));
   }
 
-  private line(called: string, returned: PromiseLike<unknown>, text: string, args: readonly unknown[], alongside: boolean): Promise<unknown> {
+  private line(called: string, returned: PromiseLike<unknown>, text: string, args: readonly unknown[], note: string): Promise<unknown> {
     const source = `await ${called};`;
-    // A line made while another still runs was not written after it: a test that awaits them in turn would wait on the first alone.
-    const note = alongside ? ' // ran while the line above was still running; a test needs them in one Promise.all' : '';
     const slot = this.slots.push(undefined) - 1;
     const line = new Line<unknown>((resolve, reject) => {
       returned.then((value) => {
@@ -216,7 +224,10 @@ export class Recorder {
    * chain on a promise: the line that made it declares the name and later
    * lines call it by that.
    */
-  private resolved(value: unknown, slot: number, source: string, note: string, text: string, args: readonly unknown[]): unknown {
+  private resolved(value: unknown, slot: number, source: string, alongside: string, text: string, args: readonly unknown[]): unknown {
+    let note = alongside;
+    // A function the server calls is written as its text, which leaves behind the variables of the code it used. A page script is sent as text and never had them.
+    if (this.functions.some((code) => !this.sentAsText.has(code) && source.includes(Function.prototype.toString.call(code)))) note = `${CALLBACK}${note}`;
     if (isData(value, 0)) {
       // A call that gives a value back only read, unless it ran a function of the code's, which may have changed the app.
       const read = value !== undefined && !args.some((arg) => holdsFunction(arg, 0));
@@ -261,7 +272,12 @@ export class Recorder {
     };
     // An engine sends a page script as its text, and a handler may be told apart by its arity.
     Object.defineProperties(handler, {
-      toString: { value: () => Function.prototype.toString.call(code) },
+      toString: {
+        value: () => {
+          this.sentAsText.add(code);
+          return Function.prototype.toString.call(code);
+        },
+      },
       name: { value: Reflect.get(code, 'name') },
       length: { value: Reflect.get(code, 'length') },
     });
@@ -270,21 +286,28 @@ export class Recorder {
   }
 
   /** An argument as a test would write it. */
-  private spell(value: unknown, depth: number): string {
+  private spell(value: unknown, depth: number, byName = false): string {
+    if (typeof value === 'string' && byName) {
+      const named = this.named(value);
+      if (named !== undefined) return named;
+    }
     if (typeof value === 'string') return `'${this.redact(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r')}'`;
     if (typeof value === 'bigint') return `${String(value)}n`;
     if (typeof value !== 'object' && typeof value !== 'function') return String(value);
     if (value === null) return 'null';
     const known = this.sources.get(value);
     if (known !== undefined) return known;
-    if (typeof value === 'function') return Function.prototype.toString.call(value);
+    if (typeof value === 'function') {
+      this.functions.push(value);
+      return Function.prototype.toString.call(value);
+    }
     if (value instanceof RegExp) return String(value);
     if (depth > MAX_DEPTH) return 'undefined';
-    if (Array.isArray(value)) return `[${value.map((item) => this.spell(item, depth + 1)).join(', ')}]`;
+    if (Array.isArray(value)) return `[${value.map((item) => this.spell(item, depth + 1, byName)).join(', ')}]`;
     if (value instanceof Date) return `new Date(${String(value.getTime())})`;
     if (!isPlainObject(value)) return `/* ${value.constructor?.name ?? 'object'} */ undefined`;
     const entries = Object.entries(value).filter(([, item]) => item !== undefined);
-    return `{ ${entries.map(([key, item]) => `${IDENTIFIER.test(key) ? key : JSON.stringify(key)}: ${this.spell(item, depth + 1)}`).join(', ')} }`;
+    return `{ ${entries.map(([key, item]) => `${IDENTIFIER.test(key) ? key : JSON.stringify(key)}: ${this.spell(item, depth + 1, byName)}`).join(', ')} }`;
   }
 }
 
