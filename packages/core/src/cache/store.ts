@@ -51,7 +51,7 @@ const HEAD_BYTES = 4_096;
 /** The reviewed file's extension. */
 export const RECORDING_EXTENSION = '.yml';
 /** The generated file's extension. */
-export const LOCK_EXTENSION = '.lock.json';
+const LOCK_EXTENSION = '.lock.json';
 
 export type CacheReadResult =
   | { readonly status: 'hit'; readonly entry: TraceEntry; readonly bytes: number }
@@ -94,6 +94,8 @@ export interface ListedRecordingFile {
   readonly name: string;
   /** Both files' sizes together. */
   readonly bytes: number;
+  /** The pair's files that say the store wrote them, each by itself: the ones `e2e cache clear` may delete. */
+  readonly files: readonly string[];
   readonly parsed: ParsedRecordingFile;
 }
 
@@ -303,6 +305,10 @@ export class FileCacheStore implements CacheStore {
     const unopened = [yaml, lock].some((file) => file !== undefined && file.head === undefined);
     const owned = writtenByStore(yaml?.head, lock?.head);
     if (!owned && !unopened) return undefined;
+    const files = [
+      ...(writtenByStore(yaml?.head, undefined) ? [`${name}${RECORDING_EXTENSION}`] : []),
+      ...(writtenByStore(undefined, lock?.head) ? [`${name}${LOCK_EXTENSION}`] : []),
+    ];
     const bytes = (yaml?.bytes ?? 0) + (lock?.bytes ?? 0);
     const problem = yaml?.problem ?? lock?.problem;
     if (problem !== undefined || yaml?.text === undefined || lock?.text === undefined) {
@@ -313,6 +319,7 @@ export class FileCacheStore implements CacheStore {
       return {
         name,
         bytes,
+        files,
         ...(owned ? {} : { unconfirmed: true }),
         parsed: {
           status: 'invalid',
@@ -326,6 +333,7 @@ export class FileCacheStore implements CacheStore {
     return {
       name,
       bytes,
+      files,
       parsed: parsed.status === 'invalid' ? { ...parsed, reason: `${name}${RECORDING_EXTENSION}: ${parsed.reason}` } : parsed,
     };
   }

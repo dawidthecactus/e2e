@@ -223,10 +223,20 @@ describe('e2e cache clear', () => {
     // Named like recordings, but nothing in them says the runner wrote them.
     writeFileSync(path.join(directory, 'ci.yml'), 'on: push\n', 'utf8');
     writeFileSync(path.join(directory, 'tool.lock.json'), '{"version": 1}\n', 'utf8');
+    // Named like the store's lock, but with something in it: another tool's.
+    writeFileSync(path.join(directory, '.index.writing'), 'pid 42\n', 'utf8');
     await invoke('cache', 'clear');
     expect(written(stderrSpy)).toContain('notes.md');
     expect(written(stderrSpy)).toContain('ci.yml');
-    expect(readdirSync(directory).toSorted()).toEqual(['ci.yml', 'notes.md', 'tool.lock.json']);
+    expect(readdirSync(directory).toSorted()).toEqual(['.index.writing', 'ci.yml', 'notes.md', 'tool.lock.json']);
+  });
+
+  it('leaves a YAML another tool wrote over a recording, and deletes the lock beside it', async () => {
+    await seed([{ keyHash: 'a'.repeat(64), trace: trace(step('tests/a.e2e.ts::settings', 'web'), 1) }]);
+    const directory = path.join(root, CACHE_DIR);
+    writeFileSync(path.join(directory, 'a-settings.yml'), 'on: push\n', 'utf8');
+    await invoke('cache', 'clear');
+    expect(readdirSync(directory)).toEqual(['a-settings.yml']);
   });
 
   it('has nothing to clear when the store was never written', async () => {

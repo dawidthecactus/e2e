@@ -11,12 +11,12 @@
  * enumerate it, so it says so instead of listing an empty directory.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readdir, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
 import picocolors from 'picocolors';
-import { FileCacheStore, LOCK_EXTENSION, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION } from '@e2e-dev/core/lib/cache/store';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES, RECORDING_EXTENSION } from '@e2e-dev/core/lib/cache/store';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig } from '../config/resolve-run.ts';
 import { errorMessage } from '@e2e-dev/core/lib/internal/errors';
@@ -56,7 +56,8 @@ interface CacheContents {
   readonly directory: string;
   readonly entries: readonly CacheEntrySummary[];
   /** The recording files' names and sizes, each file pair once. */
-  readonly files: readonly { readonly name: string; readonly bytes: number }[];
+  /** Each test's pair: its name, size, and the files in it the store wrote. */
+  readonly files: readonly { readonly name: string; readonly bytes: number; readonly owned: readonly string[] }[];
   /** Recordings, or whole file pairs, the store could not read: a miss to the runner too. */
   readonly unreadable: readonly { readonly file: string; readonly reason: string }[];
   /** Entries an older e2e wrote, one digest-named `.json` file each, which no run reads. */
@@ -67,12 +68,25 @@ interface CacheContents {
 
 /** An entry file of the store before recordings were kept per test: the key digest. */
 const LEGACY_ENTRY_FILE = /^[a-f0-9]{64}\.json$/u;
+/** A crashed writer's leftover, a store file for cleanup purposes: an atomic write's temporary file. */
+const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)\.[a-f0-9]{16}\.tmp$/u;
 /**
- * A crashed writer's leftover, a store file for cleanup purposes: an atomic
- * write's temporary file, the lock a writer holds while it rewrites a
- * test's files, or the one a waiter holds while it takes over a stale lock.
+ * The lock a writer holds while it rewrites a test's files, or the one a
+ * waiter holds while it takes over a stale lock: always empty, so a file of
+ * that name with something in it is another tool's.
  */
-const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)\.[a-f0-9]{16}\.tmp$|^\.[a-z0-9-]+\.writing(?:\.takeover)?$/u;
+const LOCK_FILE = /^\.[a-z0-9-]+\.writing(?:\.takeover)?$/u;
+
+/** Whether a file in the store directory is a leftover of the store's own: a temporary, or an empty lock. */
+function isLeftover(directory: string, name: string): boolean {
+  if (TEMPORARY_FILE.test(name)) return true;
+  if (!LOCK_FILE.test(name)) return false;
+  try {
+    return statSync(path.join(directory, name)).size === 0;
+  } catch {
+    return false;
+  }
+}
 
 /** Characters of a step's instruction a row prints. */
 const STEP_CHARS = 48;
@@ -175,7 +189,7 @@ async function resolveCacheDirectory(options: CacheOptions): Promise<string> {
 async function readContents(directory: string): Promise<CacheContents> {
   const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
   const entries: CacheEntrySummary[] = [];
-  const files: { name: string; bytes: number }[] = [];
+  const files: { name: string; bytes: number; owned: readonly string[] }[] = [];
   const unreadable: { file: string; reason: string }[] = [];
   const legacy: string[] = [];
   const foreign: string[] = [];
@@ -191,15 +205,15 @@ async function readContents(directory: string): Promise<CacheContents> {
   }
   const listedFiles = await store.list();
   // A file named like a recording is the store's only when the store lists it: one it never wrote stays foreign.
-  const owned = new Set(listedFiles.flatMap((listed) => [`${listed.name}${RECORDING_EXTENSION}`, `${listed.name}${LOCK_EXTENSION}`]));
+  const owned = new Set(listedFiles.flatMap((listed) => listed.files));
   for (const name of names.toSorted()) {
     if (LEGACY_ENTRY_FILE.test(name)) legacy.push(name);
-    else if (!owned.has(name) && !TEMPORARY_FILE.test(name)) foreign.push(name);
+    else if (!owned.has(name) && !isLeftover(directory, name)) foreign.push(name);
   }
 
   for (const listed of listedFiles) {
     const file = `${listed.name}${RECORDING_EXTENSION}`;
-    files.push({ name: listed.name, bytes: listed.bytes });
+    files.push({ name: listed.name, bytes: listed.bytes, owned: listed.files });
     const { parsed } = listed;
     if (parsed.status === 'invalid') {
       unreadable.push({ file, reason: parsed.reason });
@@ -295,7 +309,7 @@ function stats(contents: CacheContents): number {
  */
 async function clear(contents: CacheContents): Promise<number> {
   const removable = [
-    ...contents.files.flatMap((file) => [`${file.name}${RECORDING_EXTENSION}`, `${file.name}${LOCK_EXTENSION}`]),
+    ...contents.files.flatMap((file) => file.owned),
     ...contents.legacy,
   ];
   let removedFiles = 0;
@@ -327,7 +341,7 @@ async function removeTemporaries(directory: string): Promise<number> {
   }
   let removed = 0;
   for (const name of names) {
-    if (!TEMPORARY_FILE.test(name)) continue;
+    if (!isLeftover(directory, name)) continue;
     await rm(path.join(directory, name), { force: true });
     removed += 1;
   }
