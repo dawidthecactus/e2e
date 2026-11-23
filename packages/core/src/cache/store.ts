@@ -20,7 +20,7 @@
 
 import { mkdir, open, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { writeFileAtomic } from '../internal/atomic-write.ts';
+import { writeFilesAtomic } from '../internal/atomic-write.ts';
 import { errorMessage } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
 import { withFileLock } from './file-lock.ts';
@@ -281,15 +281,24 @@ export class FileCacheStore implements CacheStore {
     }
   }
 
-  /** Writes one pair, the reviewed file first; undefined when either is over the size cap. */
+  /**
+   * Writes one pair, the reviewed file first, as one replacement: a failed
+   * write leaves both files as they were, never a new YAML beside its old
+   * lock. Undefined when either is over the size cap.
+   */
   private async save(name: string, testId: string, recordings: readonly StoredRecording[]): Promise<{ bytes: number } | undefined> {
     const { yaml, lock } = await renderRecordingFile({ testId, recordings }, `${name}${LOCK_EXTENSION}`);
     const yamlBytes = Buffer.byteLength(yaml, 'utf8');
     const lockBytes = Buffer.byteLength(lock, 'utf8');
     if (yamlBytes > this.maxBytes || lockBytes > this.maxBytes) return undefined;
     await mkdir(this.directory, { recursive: true });
-    await writeFileAtomic(this.path(name, RECORDING_EXTENSION), yaml, { mode: 0o600 });
-    await writeFileAtomic(this.path(name, LOCK_EXTENSION), lock, { mode: 0o600 });
+    await writeFilesAtomic(
+      [
+        { path: this.path(name, RECORDING_EXTENSION), content: yaml },
+        { path: this.path(name, LOCK_EXTENSION), content: lock },
+      ],
+      { mode: 0o600 },
+    );
     return { bytes: yamlBytes + lockBytes };
   }
 
