@@ -215,7 +215,7 @@ class ScreenImpl implements Screen {
     rejectUnknownOptions('getByDisplayValue', options, TEXT_OPTION_KEYS, 'INVALID_LOCATOR');
     return new LocatorImpl(
       this.context,
-      this.build(textQuery('displayValue', value, options, this.scope)),
+      this.build(textQuery('displayValue', value, this.withDefaultVisible(options), this.scope)),
     );
   }
 

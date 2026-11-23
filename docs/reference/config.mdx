@@ -287,8 +287,9 @@ An id is its factory called with no options. An unknown id is
 #### `locators`
 
 Defaults for screen queries. `visible: true` makes `getByText`, `getByLabel`,
-`getByPlaceholder`, and `getByTestId` skip hidden nodes, as if each query
-passed `{ visible: true }`.
+`getByPlaceholder`, `getByDisplayValue`, and `getByTestId` skip hidden nodes,
+as if each query passed `{ visible: true }`. `getByRole` never matches a
+hidden node.
 
 ```ts
 locators: { visible: true }, // default: { visible: false }
@@ -300,8 +301,6 @@ locators: { visible: true }, // default: { visible: false }
   `screen.getByText('Saved', { visible: false })` keeps hidden matches.
 - `run_code`, `locate`, and the test lines of an
   [`e2e mcp`](/reference/mcp) session apply it too.
-- `getByRole` never matches a hidden node, and `getByDisplayValue` keeps
-  its own default, `false`.
 - A value that is not an object, a `visible` that is not a boolean, or an
   unknown key is `INVALID_CONFIG`.
 - See [Hidden duplicates](/reference/screen#hidden-duplicates).
@@ -1707,7 +1706,7 @@ export interface Target {
 ```ts
 /** Defaults for screen queries, which an option on the query itself replaces. */
 export interface LocatorsConfig {
-  /** The `visible` option of `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId`; default false. */
+  /** The `visible` option of every query but `getByRole`; default false. */
   visible?: boolean;
 }
 ```

@@ -267,8 +267,8 @@ await screen.getByTestId('memory-list', { visible: true }).getByRole('listitem')
 When most queries need it, such as on a native app that keeps earlier
 screens mounted behind the current one, set
 [`locators: { visible: true }`](/reference/config#locators) in the config or
-on a target. `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId`
-then skip hidden nodes without the option, and `{ visible: false }` on a
+on a target. Every query but `getByRole`, which never matches a hidden node,
+then skips hidden nodes without the option, and `{ visible: false }` on a
 query keeps them.
 
 ```ts title="e2e.config.ts"
@@ -1370,9 +1370,8 @@ export interface TextMatchOptions {
    * When true, nodes the platform reports as hidden are excluded before the
    * exactly-one rule is applied, so a visible node with a hidden twin (a
    * prerendered copy kept after navigation, a closed drawer) still resolves.
-   * False keeps every match, hidden ones included. Omitted, `getByText`,
-   * `getByLabel`, `getByPlaceholder`, and `getByTestId` take the target's
-   * `locators.visible`, and every other query false.
+   * False keeps every match, hidden ones included. Omitted, it is the
+   * target's `locators.visible`, on every query but `getByRole`.
    */
   visible?: boolean;
 }

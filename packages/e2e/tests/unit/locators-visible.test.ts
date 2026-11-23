@@ -1,7 +1,6 @@
 /**
- * A target's `locators.visible` is the `visible` default of `getByText`,
- * `getByLabel`, `getByPlaceholder`, and `getByTestId`. A query's own
- * `visible` replaces it.
+ * A target's `locators.visible` is the `visible` default of every query but
+ * `getByRole`. A query's own `visible` replaces it.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -38,6 +37,7 @@ const QUERIES: readonly [string, (screen: Screen, options?: { visible?: boolean 
   ['getByText', (screen, options) => screen.getByText('Email', options)],
   ['getByLabel', (screen, options) => screen.getByLabel('Email', options)],
   ['getByPlaceholder', (screen, options) => screen.getByPlaceholder('you@example.com', options)],
+  ['getByDisplayValue', (screen, options) => screen.getByDisplayValue('ada@example.com', options)],
   ['getByTestId', (screen, options) => screen.getByTestId('email', options)],
 ];
 
@@ -55,9 +55,5 @@ describe('locators.visible', () => {
 
     expect(await query(screen).count()).toBe(2);
     expect(await query(screen, { visible: true }).count()).toBe(1);
-  });
-
-  it('leaves getByDisplayValue matching hidden nodes', async () => {
-    expect(await screenWith(true).getByDisplayValue('ada@example.com').count()).toBe(2);
   });
 });

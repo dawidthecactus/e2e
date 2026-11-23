@@ -295,9 +295,9 @@ substring; a `RegExp` matches as written.
   composed.
 - `visible: true` drops nodes the page hides (a closed drawer) before the
   exactly-one rule. `locators: { visible: true }` in the config, or on a
-  target, makes it the default of `getByText`, `getByLabel`,
-  `getByPlaceholder`, and `getByTestId`; `{ visible: false }` on a query
-  keeps hidden nodes. Visibility is what renders, as `toBeVisible()` reads it:
+  target, makes it the default of every query but `getByRole`, which never
+  matches a hidden node; `{ visible: false }` on a query keeps hidden
+  nodes. Visibility is what renders, as `toBeVisible()` reads it:
   an `aria-hidden` spinner that paints is visible, so `toBeHidden()` waits
   for it to go. A closed `<details>` body and content under
   `content-visibility: hidden` are hidden through shadow roots and slots too,

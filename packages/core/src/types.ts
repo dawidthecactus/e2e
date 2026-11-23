@@ -427,9 +427,8 @@ export interface TextMatchOptions {
    * When true, nodes the platform reports as hidden are excluded before the
    * exactly-one rule is applied, so a visible node with a hidden twin (a
    * prerendered copy kept after navigation, a closed drawer) still resolves.
-   * False keeps every match, hidden ones included. Omitted, `getByText`,
-   * `getByLabel`, `getByPlaceholder`, and `getByTestId` take the target's
-   * `locators.visible`, and every other query false.
+   * False keeps every match, hidden ones included. Omitted, it is the
+   * target's `locators.visible`, on every query but `getByRole`.
    */
   visible?: boolean;
 }
@@ -1544,7 +1543,7 @@ export interface Target {
 
 /** Defaults for screen queries, which an option on the query itself replaces. */
 export interface LocatorsConfig {
-  /** The `visible` option of `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId`; default false. */
+  /** The `visible` option of every query but `getByRole`; default false. */
   visible?: boolean;
 }
 
