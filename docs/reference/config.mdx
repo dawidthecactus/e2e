@@ -294,12 +294,14 @@ passed `{ visible: true }`.
 locators: { visible: true }, // default: { visible: false }
 ```
 
-- A target's `locators` replaces it for that target.
+- A target's `locators: { visible: false }` turns it off for that target.
+  A target with no `visible` of its own takes the config's.
 - A query's own `visible` wins over both:
   `screen.getByText('Saved', { visible: false })` keeps hidden matches.
+- `run_code`, `locate`, and the test lines of an
+  [`e2e mcp`](/reference/mcp) session apply it too.
 - `getByRole` never matches a hidden node, and `getByDisplayValue` keeps
   its own default, `false`.
-- `run_code` in an [`e2e mcp`](/reference/mcp) session applies it too.
 - A value that is not an object, a `visible` that is not a boolean, or an
   unknown key is `INVALID_CONFIG`.
 - See [Hidden duplicates](/reference/screen#hidden-duplicates).
@@ -1695,7 +1697,7 @@ export interface Target {
   trace?: RecordingMode;
   /** Which attempts on this target record a video, in place of the config's `video`. */
   video?: RecordingMode;
-  /** Defaults for this target's screen queries, in place of the config's `locators`. */
+  /** Defaults for this target's screen queries; a `visible` set here wins over the config's. */
   locators?: LocatorsConfig;
 }
 ```

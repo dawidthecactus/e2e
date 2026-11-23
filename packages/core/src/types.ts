@@ -1538,7 +1538,7 @@ export interface Target {
    * `UNSUPPORTED_ARTIFACT`.
    */
   video?: RecordingMode;
-  /** Defaults for this target's screen queries, in place of the config's `locators`. */
+  /** Defaults for this target's screen queries; a `visible` set here wins over the config's. */
   locators?: LocatorsConfig;
 }
 

@@ -177,6 +177,7 @@ class ScreenImpl implements Screen {
     return this.wrap === undefined ? expression : this.wrap(expression);
   }
 
+  /** The query's options, with the target's `locators.visible` when they set no `visible`. */
   private withDefaultVisible(options: TextMatchOptions | undefined): TextMatchOptions {
     return { ...options, visible: options?.visible ?? this.context.locators.visible };
   }

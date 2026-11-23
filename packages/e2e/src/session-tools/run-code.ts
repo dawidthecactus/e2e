@@ -60,8 +60,6 @@ export interface RunCodeSession {
   readonly attempt: (signal: AbortSignal | undefined) => RunCodeAttempt;
   /** The fixtures the target's engine contributes, which `run_code` names in a refusal and never runs. */
   readonly engineFixtures: readonly string[];
-  /** The target's query defaults, which the session's screen applies as a test's does. */
-  readonly locators: ResolvedTarget['locators'];
 }
 
 interface RunCodeOptions extends RunCodeSession {
@@ -71,6 +69,8 @@ interface RunCodeOptions extends RunCodeSession {
   readonly screen: Pick<ScreenPresenter, 'update'>;
   /** Told the source of every statement that passed and is not a read, in the order they ran, for `test_lines`. */
   readonly record?: ((passed: readonly string[]) => void) | undefined;
+  /** The target's query defaults, which the session's screen applies as a test's does. */
+  readonly locators: ResolvedTarget['locators'];
 }
 
 interface RunCodeArgs {

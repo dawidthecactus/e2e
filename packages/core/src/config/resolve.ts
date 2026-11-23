@@ -1026,6 +1026,8 @@ function computeConfigDigest(
   // one leaves the replays valid, like a reporter.
   // `targets` digest by declaration below and never enter the clone: an
   // engine holds `secrets.get()` handles, which refuse to serialize.
+  // `locators` enters through them, resolved per target, so one default
+  // digests alike wherever it is written.
   const {
     failOnSkippedFailure: _failOnSkippedFailure,
     maxDuration: _maxDuration,
@@ -1034,6 +1036,7 @@ function computeConfigDigest(
     output: _output,
     trace: _trace,
     video: _video,
+    locators: _locators,
     targets: _targets,
     credentials: _credentials,
     secrets: _secrets,

@@ -1275,11 +1275,14 @@ describe('resolveConfig', () => {
       expect(visibleOf({ targets, locators: { visible: true } })).toEqual([true, false, true]);
     });
 
-    it('changes the digest only when it turns visible on', () => {
+    it('changes the digest only when it turns visible on, wherever it is set', () => {
       const plain = resolve({}).configDigest;
+      expect(resolve({ locators: {} }).configDigest).toBe(plain);
+      expect(resolve({ locators: { visible: false } }).configDigest).toBe(plain);
       expect(resolve({ targets: [{ ...WEB, locators: { visible: false } }] }).configDigest).toBe(plain);
-      expect(resolve({ targets: [{ ...WEB, locators: { visible: true } }] }).configDigest).not.toBe(plain);
-      expect(resolve({ locators: { visible: true } }).configDigest).not.toBe(plain);
+      const visible = resolve({ locators: { visible: true } }).configDigest;
+      expect(visible).not.toBe(plain);
+      expect(resolve({ targets: [{ ...WEB, locators: { visible: true } }] }).configDigest).toBe(visible);
     });
 
     it('refuses a value that is not an object with a boolean visible, wherever it is set', () => {

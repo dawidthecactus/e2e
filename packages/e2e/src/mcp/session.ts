@@ -474,7 +474,8 @@ export class SessionHost {
         }),
         warn: (message) => this.log('warning', message),
         onActionFailed: (cause) => usage.failed(classifyError(cause).code),
-        runCode: { attempt: () => attempt, engineFixtures: Object.keys(target.engine?.fixtures ?? {}), locators: target.locators },
+        runCode: { attempt: () => attempt, engineFixtures: Object.keys(target.engine?.fixtures ?? {}) },
+        locators: target.locators,
       });
       const live: LiveSession = {
         kind: 'standalone',
