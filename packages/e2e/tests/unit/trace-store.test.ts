@@ -427,6 +427,23 @@ describe('FileCacheStore', () => {
     expect((await store.read(KEY, step())).status).toBe('miss');
   });
 
+  it('reads, even when not writable, only once a writer of the test is done', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    // Another process holds the test's lock, halfway through replacing its files.
+    const held = path.join(directory, `.${NAME}.writing`);
+    await writeFile(held, '', 'utf8');
+    const readOnly = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
+    let settled = false;
+    const pending = readOnly.read(KEY, step()).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(settled).toBe(false);
+    await rm(held);
+    expect((await pending).status).toBe('hit');
+  });
+
   it('never writes when not writable', async () => {
     const { directory, store } = await makeStore({ writable: false });
     expect(await store.write(KEY, payload())).toBeUndefined();

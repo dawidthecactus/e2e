@@ -235,14 +235,15 @@ export class FileCacheStore implements CacheStore {
   }
 
   /**
-   * Runs `operation` under the lock of the test's base name when this store
-   * writes; a read-only store has no writer to wait for. Only a write creates
-   * the directory: a read or a delete in a directory that does not exist, or
-   * that no one can write (a read-only mount), has nothing to wait for
-   * either, and leaves nothing behind.
+   * Runs `operation` under the lock of the test's base name, so that it
+   * never sees a pair another writer is halfway through replacing. A
+   * read-only store locks its reads too: another run, or another worker,
+   * can be writing the same directory. Only a write creates the directory:
+   * a read or a delete in a directory that does not exist, or that no one
+   * can write (a read-only mount), has no writer to wait for, and leaves
+   * nothing behind.
    */
   private async locked<T>(base: string, operation: () => Promise<T>, creates = false): Promise<T> {
-    if (!this.writable) return operation();
     if (creates) await mkdir(this.directory, { recursive: true });
     else if (!(await access(this.directory, constants.W_OK).then(() => true, () => false))) return operation();
     return withFileLock(join(this.directory, `.${base}.writing`), operation);
