@@ -10,6 +10,7 @@
 import { isKeyModifier, KEY_MODIFIERS, type KeyModifier } from '../engine/contract.ts';
 import type { JsonValue, ScrollDirection } from '../types.ts';
 import { canonicalJson } from '../internal/ids.ts';
+import { MAX_PARAMS_DEPTH } from '../internal/json-value.ts';
 import { VIEWPORT_LIMITS } from '../internal/geometry.ts';
 import { readBoundedText, readRecordedModel } from './trace-fields.ts';
 import {
@@ -452,18 +453,16 @@ function readProvenance(document: unknown): TraceProvenance | undefined {
   };
 }
 
-/** Deepest a recorded params value nests; projected params are a test's own small literal. */
-const MAX_PARAMS_DEPTH = 16;
-
 /**
  * Recorded params: a plain JSON object no longer than `MAX_TRACE_PARAMS_CHARS`
- * as canonical JSON, nested at most `MAX_PARAMS_DEPTH` levels, or undefined.
+ * as canonical JSON, nested no deeper than `agent.act` accepts, or undefined.
  */
 function readParams(document: unknown): Readonly<Record<string, JsonValue>> | undefined {
   const json = (value: unknown, depth: number): value is JsonValue => {
+    if (depth > MAX_PARAMS_DEPTH) return false;
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
     if (typeof value === 'number') return Number.isFinite(value);
-    if (typeof value !== 'object' || depth >= MAX_PARAMS_DEPTH) return false;
+    if (typeof value !== 'object') return false;
     if (Array.isArray(value)) return value.every((item) => json(item, depth + 1));
     const prototype: unknown = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return false;

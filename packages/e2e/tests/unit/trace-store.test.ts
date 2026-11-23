@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { instructionDigest, paramsDigest } from '@e2e-dev/core/lib/cache/identity';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '@e2e-dev/core/lib/cache/store';
 import type { ActionTrace, TraceProvenance } from '@e2e-dev/core/lib/cache/trace';
+import { MAX_PARAMS_DEPTH, validateJsonValue } from '@e2e-dev/core/lib/internal/json-value';
+import type { JsonValue } from '@e2e-dev/core/lib/types';
 
 const KEY = 'a'.repeat(64);
 const OTHER_KEY = 'b'.repeat(64);
@@ -164,6 +166,17 @@ describe('FileCacheStore', () => {
     expect(yaml).toContain('upgrade the plan to {tier}\n');
     expect(yaml).toContain('\n\n  - act:');
     expect((await store.read(OTHER_KEY, step('web', { callIndex: 1 }))).status).toBe('hit');
+  });
+
+  it('reads back params nested as deep as agent.act accepts', async () => {
+    const { store } = await makeStore();
+    // 32 levels of objects around a string, the deepest the params validation lets through.
+    let deep: Record<string, JsonValue> = { leaf: 'x' };
+    for (let level = 1; level < 32; level += 1) deep = { next: deep };
+    validateJsonValue(deep, 'params', { maxDepth: MAX_PARAMS_DEPTH });
+    const deepStep = step('web', { params: deep, paramsDigest: paramsDigest(deep) });
+    await store.write(KEY, payload('web', { recordedFor: deepStep }));
+    expect((await store.read(KEY, deepStep)).status).toBe('hit');
   });
 
   it('names an agent other than the default on its step', async () => {
