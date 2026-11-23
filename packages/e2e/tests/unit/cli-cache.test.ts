@@ -258,6 +258,15 @@ describe('e2e cache clear', () => {
     expect(readdirSync(directory)).toEqual(['a-settings.yml']);
   });
 
+  it('leaves the lock and temporary file of a writer still at work', async () => {
+    const directory = path.join(root, CACHE_DIR);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, '.a-live.writing'), '', 'utf8');
+    writeFileSync(path.join(directory, 'a-live.yml.0123456789abcdef.tmp'), 'half', 'utf8');
+    await invoke('cache', 'clear');
+    expect(readdirSync(directory).toSorted()).toEqual(['.a-live.writing', 'a-live.yml.0123456789abcdef.tmp']);
+  });
+
   it('has nothing to clear when the store was never written', async () => {
     await invoke('cache', 'clear');
     expect(written(stdoutSpy)).toContain('no replay cache entries to clear');

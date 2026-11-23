@@ -77,15 +77,29 @@ const TEMPORARY_FILE = /^(?:[a-z0-9-]+(?:\.yml|\.lock\.json)|[a-f0-9]{64}\.json)
  */
 const LOCK_FILE = /^\.[a-z0-9-]+\.writing(?:\.takeover)?$/u;
 
-/** Whether a file in the store directory is a leftover of the store's own: a temporary, or an empty lock. */
-function isLeftover(directory: string, name: string): boolean {
-  if (TEMPORARY_FILE.test(name)) return true;
-  if (!LOCK_FILE.test(name)) return false;
+/**
+ * Age past which a store lock or temporary file was left by a writer that
+ * died: the store takes a lock over at the same age (`cache/file-lock.ts`).
+ * A younger one belongs to a writer still at work.
+ */
+const LEFTOVER_MS = 30_000;
+
+/**
+ * Whether a file in the store directory is the store's working file (a
+ * temporary, or an empty lock), and if so whether a writer that died left
+ * it (`stale`) or one is still using it (`live`).
+ */
+function workingFile(directory: string, name: string): 'stale' | 'live' | undefined {
+  const temporary = TEMPORARY_FILE.test(name);
+  if (!temporary && !LOCK_FILE.test(name)) return undefined;
+  let file: ReturnType<typeof statSync>;
   try {
-    return statSync(path.join(directory, name)).size === 0;
+    file = statSync(path.join(directory, name));
   } catch {
-    return false;
+    return undefined;
   }
+  if (!temporary && file.size !== 0) return undefined;
+  return Date.now() - file.mtimeMs > LEFTOVER_MS ? 'stale' : 'live';
 }
 
 /** Characters of a step's instruction a row prints. */
@@ -209,7 +223,7 @@ async function readContents(directory: string): Promise<CacheContents> {
   const owned = new Set(listedFiles.flatMap((listed) => listed.files));
   for (const name of names.toSorted()) {
     if (LEGACY_ENTRY_FILE.test(name)) legacy.push(name);
-    else if (!owned.has(name) && !isLeftover(directory, name)) foreign.push(name);
+    else if (!owned.has(name) && workingFile(directory, name) === undefined) foreign.push(name);
   }
 
   for (const listed of listedFiles) {
@@ -320,7 +334,7 @@ async function clear(contents: CacheContents): Promise<number> {
     await rm(file, { force: true });
     removedFiles += 1;
   }
-  // Leftover temporaries are neither entries nor foreign files; they go too.
+  // A dead writer's working files are neither entries nor foreign files; they go too. A live writer's stay.
   const temporaries = await removeTemporaries(contents.directory);
   const removed = removedFiles + temporaries;
   if (contents.foreign.length === 0) await rmdir(contents.directory).catch(() => undefined);
@@ -342,7 +356,7 @@ async function removeTemporaries(directory: string): Promise<number> {
   }
   let removed = 0;
   for (const name of names) {
-    if (!isLeftover(directory, name)) continue;
+    if (workingFile(directory, name) !== 'stale') continue;
     await rm(path.join(directory, name), { force: true });
     removed += 1;
   }
