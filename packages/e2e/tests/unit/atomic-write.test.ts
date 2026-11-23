@@ -1,6 +1,6 @@
 /** Replacing files that must agree: all of them, or on an error none. */
 
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -34,7 +34,8 @@ describe('writeFilesAtomic', () => {
   it('puts back the files it replaced when a later one fails', async () => {
     const directory = await makeDir();
     await writeFile(path.join(directory, 'a.yml'), 'old a', 'utf8');
-    // A non-empty directory where the second file goes: its rename fails.
+    const before = (await stat(path.join(directory, 'a.yml'))).ino;
+    // A non-empty directory where the second file goes: it fails once the first file is already replaced.
     await mkdir(path.join(directory, 'a.lock.json', 'inside'), { recursive: true });
     await expect(
       writeFilesAtomic([
@@ -43,6 +44,8 @@ describe('writeFilesAtomic', () => {
       ]),
     ).rejects.toThrow();
     expect(await readFile(path.join(directory, 'a.yml'), 'utf8')).toBe('old a');
+    // Another file than the one there before: it was replaced, then its content put back.
+    expect((await stat(path.join(directory, 'a.yml'))).ino).not.toBe(before);
     expect((await readdir(directory)).toSorted()).toEqual(['a.lock.json', 'a.yml']);
   });
 

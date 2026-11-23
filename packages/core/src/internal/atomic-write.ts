@@ -53,12 +53,14 @@ export async function writeFilesAtomic(
     for (const [index, file] of files.entries()) {
       await writeFile(temporaries[index]!, file.content, { encoding: 'utf8', mode: options.mode });
     }
-    const previous = await Promise.all(files.map((file) => readFile(file.path).catch((cause: NodeJS.ErrnoException) => {
-      if (cause.code === 'ENOENT') return undefined;
-      throw cause;
-    })));
+    // Each file's previous content, read just before it is replaced: what a failure puts back.
+    const previous: (Buffer | undefined)[] = [];
     for (const [index, file] of files.entries()) {
       try {
+        previous.push(await readFile(file.path).catch((cause: NodeJS.ErrnoException) => {
+          if (cause.code === 'ENOENT') return undefined;
+          throw cause;
+        }));
         await rename(temporaries[index]!, file.path);
       } catch (cause) {
         for (const [replaced, earlier] of files.slice(0, index).entries()) {
