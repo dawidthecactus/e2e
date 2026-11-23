@@ -207,6 +207,29 @@ export class FileCacheStore implements CacheStore {
   }
 
   /**
+   * Deletes the files of one pair the store wrote, under its test's lock and
+   * as they are then: a write that landed since the pair was listed goes
+   * whole, never half, so no lone YAML is left behind. Returns how many
+   * files went. Not part of `CacheStore`: only `e2e cache clear` empties a
+   * store.
+   */
+  async clear(name: string): Promise<number> {
+    return this.locked(name.replace(COLLISION_SUFFIX, ''), async () => {
+      const file = await this.load(name);
+      let removed = 0;
+      for (const owned of file?.files ?? []) {
+        try {
+          await unlink(join(this.directory, owned));
+          removed += 1;
+        } catch (cause) {
+          if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+        }
+      }
+      return removed;
+    });
+  }
+
+  /**
    * Every file pair in the directory, readable or not; none when the
    * directory does not exist. Not part of `CacheStore`: only `cache.strict`
    * and `e2e cache` list a store, and only this one.

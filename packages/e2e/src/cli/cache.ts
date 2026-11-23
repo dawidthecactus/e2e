@@ -55,8 +55,8 @@ interface CacheEntrySummary {
 interface CacheContents {
   readonly directory: string;
   readonly entries: readonly CacheEntrySummary[];
-  /** Each test's pair: its name, size, and the files in it the store wrote. */
-  readonly files: readonly { readonly name: string; readonly bytes: number; readonly owned: readonly string[] }[];
+  /** Each test's pair: its name and size. */
+  readonly files: readonly { readonly name: string; readonly bytes: number }[];
   /** Recordings, or whole file pairs, the store could not read: an `invalid-entry` to the runner, never a replay. */
   readonly unreadable: readonly { readonly file: string; readonly reason: string }[];
   /** Entries an older e2e wrote, one digest-named `.json` file each, which no run reads. */
@@ -202,7 +202,7 @@ async function resolveCacheDirectory(options: CacheOptions): Promise<string> {
 async function readContents(directory: string): Promise<CacheContents> {
   const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
   const entries: CacheEntrySummary[] = [];
-  const files: { name: string; bytes: number; owned: readonly string[] }[] = [];
+  const files: { name: string; bytes: number }[] = [];
   const unreadable: { file: string; reason: string }[] = [];
   const legacy: string[] = [];
   const foreign: string[] = [];
@@ -227,7 +227,7 @@ async function readContents(directory: string): Promise<CacheContents> {
 
   for (const listed of listedFiles) {
     const file = `${listed.name}${RECORDING_EXTENSION}`;
-    files.push({ name: listed.name, bytes: listed.bytes, owned: listed.files });
+    files.push({ name: listed.name, bytes: listed.bytes });
     const { parsed } = listed;
     if (parsed.status === 'invalid') {
       unreadable.push({ file, reason: parsed.reason });
@@ -322,12 +322,11 @@ function stats(contents: CacheContents): number {
  * and a mistyped one must not take a project's files with it.
  */
 async function clear(contents: CacheContents): Promise<number> {
-  const removable = [
-    ...contents.files.flatMap((file) => file.owned),
-    ...contents.legacy,
-  ];
+  const store = new FileCacheStore({ directory: contents.directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
   let removedFiles = 0;
-  for (const name of removable) {
+  // Each test's pair under the lock its writers take, so a run writing it meanwhile is never cut in half.
+  for (const file of contents.files) removedFiles += await store.clear(file.name);
+  for (const name of contents.legacy) {
     const file = path.join(contents.directory, name);
     if (!existsSync(file)) continue;
     await rm(file, { force: true });

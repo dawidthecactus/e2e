@@ -608,6 +608,19 @@ describe('FileCacheStore', () => {
     expect((await pending).map((file) => file.name)).toEqual([NAME]);
   });
 
+  it('clears a pair under its test\'s lock, as it is once a writer is done', async () => {
+    const { directory, store } = await makeStore();
+    await store.write(KEY, payload());
+    const held = path.join(directory, `.${NAME}.writing`);
+    await writeFile(held, '', 'utf8');
+    const pending = store.clear(NAME);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The writer that held the lock finishes a new recording of the test before the clear goes ahead.
+    await rm(held);
+    expect(await pending).toBe(2);
+    expect(await readdir(directory)).toEqual([]);
+  });
+
   it('never writes when not writable', async () => {
     const { directory, store } = await makeStore({ writable: false });
     expect(await store.write(KEY, payload())).toBeUndefined();
