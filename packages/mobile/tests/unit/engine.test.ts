@@ -735,6 +735,17 @@ describe('lifecycle', () => {
       expect(await bound(atBoot.prepare(info))).toMatch(/^rejected: boot failed: ios device A is owned by session/);
       expect(atBoot.fake.methods()).not.toContain('devices.list');
     }
+    // So is the device `e2e run --device` names over a target that names none, even with another one free: refused at
+    // the open or the runner start, it is left to the first attempt.
+    for (const method of ['apps.open', 'command.prepare'] as const) {
+      const pinned = harness({ device: undefined });
+      pinned.fake.respond('devices.list', () => free);
+      pinned.fake.respond(method, () => {
+        throw inSession('A');
+      });
+      expect(await bound(pinned.prepare({ ...info, device: 'A' })), method).toBe(JSON.stringify([{ device: 'A' }]));
+      expect(pinned.fake.methods(), method).not.toContain('devices.list');
+    }
     for (const configured of ['A', lease, undefined] as const) {
       for (const [method, left] of [['apps.open', /did not open \(open Settings failed: Device is already in use/], ['command.prepare', /automation runner not prepared \(.*Device is already in use/]] as const) {
         const h = harness({ device: configured });
