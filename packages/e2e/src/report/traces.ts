@@ -11,6 +11,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { recordingFileName } from '@e2e-dev/core/lib/cache/store';
 import { displayPath } from '@e2e-dev/core/lib/internal/paths';
 import { resultSegment } from '@e2e-dev/core/lib/run/artifacts';
 import type { Report1Document, ReportExplore, ReportResult } from './build.ts';
@@ -77,7 +78,9 @@ export async function writeTracePages(report: Report1Document, traced: ReadonlyS
       artifactsDir: relative(options.resultsRoot),
       pageDir: dir,
       readArtifact,
-      ...(options.cacheDir === undefined ? {} : { cacheDir: displayPath(options.projectRoot, options.cacheDir) }),
+      ...(options.cacheDir === undefined
+        ? {}
+        : { cacheFile: displayPath(options.projectRoot, path.join(options.cacheDir, await recordingFileName(options.cacheDir, result.testId))) }),
     });
     await writeTextReport(file, page);
     pages.set(result.id, relative(file));

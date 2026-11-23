@@ -293,6 +293,18 @@ export class FileCacheStore implements CacheStore {
   }
 }
 
+/**
+ * The reviewed file that holds, or would hold, a test's recordings in the
+ * file store at `directory`: the one named for the test, or its colliding
+ * name when that file exists, since only a write that met another test's
+ * file takes it.
+ */
+export async function recordingFileName(directory: string, testId: string): Promise<string> {
+  const base = recordingName(testId);
+  const collided = `${collisionName(base, testId)}${RECORDING_EXTENSION}`;
+  return (await stat(join(directory, collided)).then(() => true, () => false)) ? collided : `${base}${RECORDING_EXTENSION}`;
+}
+
 /** The name a store file carries before its extension, or undefined for any other file. */
 export function recordingStem(fileName: string): string | undefined {
   const stem = fileName.endsWith(LOCK_EXTENSION)

@@ -47,8 +47,8 @@ export interface TracePageOptions {
   readonly pageDir?: string | undefined;
   /** Reads one artifact by its report path, for inlining the screen text; absent when the files are not at hand. */
   readonly readArtifact?: ((reportPath: string) => string | undefined) | undefined;
-  /** The replay cache directory as the reader should see it; a step's entry is named as a file there. */
-  readonly cacheDir?: string | undefined;
+  /** The file holding the test's replay recordings, as the reader should see it; each recorded step names it with its key. */
+  readonly cacheFile?: string | undefined;
 }
 
 // --- facts shared with the run page ---
@@ -364,9 +364,9 @@ function appLogLine(entry: AppLogRecord, format: 'markdown' | 'text' = 'markdown
  * poll that waited or failed (the values it read in order), where the app
  * went, and every line the app logged while it ran (`appLog`, the attempt's).
  */
-function stepDetailLines(step: ReportStep, appLog: readonly AppLogRecord[], options: Pick<TracePageOptions, 'cacheDir'> = {}): string[] {
+function stepDetailLines(step: ReportStep, appLog: readonly AppLogRecord[], options: Pick<TracePageOptions, 'cacheFile'> = {}): string[] {
   const lines: string[] = [];
-  if (step.cache !== undefined) lines.push(cacheLine(step.cache, options.cacheDir));
+  if (step.cache !== undefined) lines.push(cacheLine(step.cache, options.cacheFile));
   const items: PageItem[] = [
     ...step.events
       .filter((event) => event.kind === 'engine' || event.kind === 'navigation' || (event.kind === 'poll' && ((event.count ?? 0) > 1 || event.status !== 'passed')))
@@ -410,7 +410,7 @@ export function numberedAppLogLines(
   });
 }
 
-function cacheLine(cache: StepCacheRecord, cacheDir: string | undefined): string {
+function cacheLine(cache: StepCacheRecord, cacheFile: string | undefined): string {
   const how =
     cache.mode === 'self-finalized'
       ? `replayed all ${plural(cache.totalActions, 'recorded action')}, no model call`
@@ -424,7 +424,7 @@ function cacheLine(cache: StepCacheRecord, cacheDir: string | undefined): string
     ...(cache.write === undefined ? [] : [CACHE_WRITE_TEXT[cache.write]]),
     ...(cache.notRecorded === 'param-collision' ? ['nothing recorded: a unique() value collides with another param'] : []),
   ];
-  const entry = cache.entry === undefined || cacheDir === undefined ? '' : ` (${code(`${cacheDir}/${cache.entry}.json`, MAX_PATH_CHARS)})`;
+  const entry = cache.entry === undefined || cacheFile === undefined ? '' : ` (${code(cacheFile, MAX_PATH_CHARS)}, key ${code(cache.entry.slice(0, 12), MAX_ID_CHARS)})`;
   return `${parts.join('; ')}${entry}`;
 }
 
